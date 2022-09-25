@@ -1,4 +1,8 @@
-use std::{collections::HashMap, net::UdpSocket, time::SystemTime};
+use std::{
+    collections::{HashMap, VecDeque},
+    net::UdpSocket,
+    time::SystemTime,
+};
 
 use bevy::{
     diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
@@ -36,6 +40,13 @@ struct ClientLobby {
 
 #[derive(Debug)]
 struct MostRecentTick(Option<u32>);
+
+#[derive(Default)]
+struct PlayerInputQueue {
+    queue: VecDeque<PlayerInput>,
+    entity: Option<Entity>,
+    last_update_tick: Option<u32>,
+}
 
 fn new_renet_client() -> RenetClient {
     let server_addr = "127.0.0.1:5000".parse().unwrap();
@@ -80,6 +91,7 @@ fn main() {
     app.insert_resource(MostRecentTick(None));
     app.insert_resource(new_renet_client());
     app.insert_resource(NetworkMapping::default());
+    app.insert_resource(PlayerInputQueue::default());
 
     app.add_system(player_input);
     app.add_system(camera_follow);
@@ -87,6 +99,8 @@ fn main() {
     app.add_system(client_send_input.with_run_criteria(run_if_client_connected));
     app.add_system(client_send_player_commands.with_run_criteria(run_if_client_connected));
     app.add_system(client_sync_players.with_run_criteria(run_if_client_connected));
+    app.add_system(client_predict_input.with_run_criteria(run_if_client_connected));
+
     app.add_system(exit_on_esc_system);
 
     app.insert_resource(RenetClientVisualizer::<200>::new(
@@ -133,6 +147,7 @@ fn player_input(
     target_query: Query<&Transform, With<Target>>,
     mut player_commands: EventWriter<PlayerCommand>,
     most_recent_tick: Res<MostRecentTick>,
+    mut player_input_queue: ResMut<PlayerInputQueue>,
 ) {
     player_input.left = keyboard_input.pressed(KeyCode::A) || keyboard_input.pressed(KeyCode::Left);
     player_input.right =
@@ -140,6 +155,8 @@ fn player_input(
     player_input.up = keyboard_input.pressed(KeyCode::W) || keyboard_input.pressed(KeyCode::Up);
     player_input.down = keyboard_input.pressed(KeyCode::S) || keyboard_input.pressed(KeyCode::Down);
     player_input.most_recent_tick = most_recent_tick.0;
+
+    player_input_queue.queue.push_back(*player_input);
 
     if mouse_button_input.just_pressed(MouseButton::Left) {
         let target_transform = target_query.single();
@@ -174,7 +191,9 @@ fn client_send_player_commands(
 /// - DespawnProjectile (directly de-spawn entity)
 ///
 /// receive ServerChannel::NetworkFrame
+/// - update most_recent_tick
 /// - deserialize & apply transformation updates to entities
+///
 fn client_sync_players(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -183,6 +202,7 @@ fn client_sync_players(
     mut lobby: ResMut<ClientLobby>,
     mut network_mapping: ResMut<NetworkMapping>,
     mut most_recent_tick: ResMut<MostRecentTick>,
+    mut player_input_queue: ResMut<PlayerInputQueue>,
 ) {
     let client_id = client.client_id();
     while let Some(message) = client.receive_message(ServerChannel::ServerMessages.id()) {
@@ -211,6 +231,7 @@ fn client_sync_players(
                 };
                 lobby.players.insert(id, player_info);
                 network_mapping.0.insert(entity, client_entity.id());
+                player_input_queue.entity = Some(client_entity.id());
             }
             ServerMessages::PlayerRemove { id } => {
                 println!("Player {} disconnected.", id);
@@ -261,8 +282,53 @@ fn client_sync_players(
                     translation,
                     ..Default::default()
                 };
+                info!("apply transform {:?} {:?}", entity, transform);
                 commands.entity(*entity).insert(transform);
+                if player_input_queue.entity == Some(*entity) {
+                    info!("update for player input queue");
+                    player_input_queue.last_update_tick = Some(frame.tick);
+                }
             }
+        }
+    }
+}
+
+fn client_predict_input(
+    mut player_input_queue: ResMut<PlayerInputQueue>,
+    mut transform_query: Query<&mut Transform>,
+    time: Res<Time>,
+) {
+    if let (Some(entity), Some(last_tick)) = (
+        player_input_queue.entity,
+        player_input_queue.last_update_tick,
+    ) {
+        while let Some(input) = player_input_queue.queue.front() {
+            let do_pop = match input.most_recent_tick {
+                Some(tick) if tick < last_tick => true,
+                None => true,
+                _ => false,
+            };
+            if do_pop {
+                info!("pop outdated");
+                player_input_queue.queue.pop_front();
+            } else {
+                break;
+            }
+        }
+
+        if let Ok(mut transform) = transform_query.get_mut(entity) {
+            for input in &player_input_queue.queue {
+                let x = (input.right as i8 - input.left as i8) as f32;
+                let y = (input.down as i8 - input.up as i8) as f32;
+                let direction = Vec2::new(x, y).normalize_or_zero();
+
+                const PLAYER_MOVE_SPEED: f32 = 5.0;
+
+                transform.translation.x += direction.x * PLAYER_MOVE_SPEED * time.delta_seconds();
+                transform.translation.z += direction.y * PLAYER_MOVE_SPEED * time.delta_seconds();
+            }
+
+            player_input_queue.queue.clear();
         }
     }
 }
