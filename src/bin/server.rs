@@ -1,4 +1,8 @@
-use std::{collections::HashMap, net::UdpSocket, time::SystemTime};
+use std::{
+    collections::{HashMap, VecDeque},
+    net::UdpSocket,
+    time::SystemTime,
+};
 
 use bevy::{
     diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
@@ -13,7 +17,7 @@ use bevy_renet::{
 use renet_test::{
     exit_on_esc_system, server_connection_config, setup_level, spawn_fireball, ClientChannel,
     NetworkFrame, Player, PlayerCommand, PlayerInput, Projectile, ServerChannel, ServerMessages,
-    PROTOCOL_ID,
+    PLAYER_MOVE_SPEED, PROTOCOL_ID,
 };
 use renet_visualizer::RenetServerVisualizer;
 
@@ -28,8 +32,6 @@ struct NetworkTick(u32);
 // Clients last received ticks
 #[derive(Debug, Default)]
 struct ClientTicks(HashMap<u64, Option<u32>>);
-
-const PLAYER_MOVE_SPEED: f32 = 5.0;
 
 fn new_renet_server() -> RenetServer {
     let server_addr = "127.0.0.1:5000".parse().unwrap();
@@ -59,7 +61,7 @@ fn main() {
     app.insert_resource(ClientTicks::default());
     app.insert_resource(new_renet_server());
     app.insert_resource(RenetServerVisualizer::<200>::default());
-    app.insert_resource(SendTickTimer(Timer::from_seconds(0.1, true)));
+    app.insert_resource(SendTickTimer(Timer::from_seconds(1.0, true)));
 
     app.add_system(server_update_system);
     app.add_system(server_network_sync);
@@ -77,6 +79,20 @@ fn main() {
     app.run();
 }
 
+#[derive(Component, Default)]
+struct PlayerInputQueue {
+    queue: VecDeque<PlayerInput>,
+    last_applied_serial: u32,
+}
+
+///
+/// recive ServerEvent
+/// - ClientConnected
+/// - ClientDisconnected
+///
+/// receive ClientChannel::Command
+/// - PlayerCommand
+/// - PlayerInput: put nnto player entity as component
 #[allow(clippy::too_many_arguments)]
 fn server_update_system(
     mut server_events: EventReader<ServerEvent>,
@@ -87,7 +103,7 @@ fn server_update_system(
     mut server: ResMut<RenetServer>,
     mut visualizer: ResMut<RenetServerVisualizer<200>>,
     mut client_ticks: ResMut<ClientTicks>,
-    players: Query<(Entity, &Player, &Transform)>,
+    mut players: Query<(Entity, &Player, &Transform, &mut PlayerInputQueue)>,
 ) {
     for event in server_events.iter() {
         match event {
@@ -96,7 +112,7 @@ fn server_update_system(
                 visualizer.add_client(*id);
 
                 // Initialize other players for this new client
-                for (entity, player, transform) in players.iter() {
+                for (entity, player, transform, _) in players.iter() {
                     // let translation: [f32; 3] = transform.translation.into();
                     let message = bincode::serialize(&ServerMessages::PlayerCreate {
                         id: player.id,
@@ -120,7 +136,8 @@ fn server_update_system(
                     .insert(LockedAxes::ROTATION_LOCKED | LockedAxes::TRANSLATION_LOCKED_Y)
                     .insert(Collider::capsule_y(0.5, 0.5))
                     .insert(PlayerInput::default())
-                    .insert(Velocity::default())
+                    // .insert(Velocity::default())
+                    .insert(PlayerInputQueue::default())
                     .insert(Player { id: *id })
                     .id();
 
@@ -161,7 +178,7 @@ fn server_update_system(
                     );
 
                     if let Some(player_entity) = lobby.players.get(&client_id) {
-                        if let Ok((_, _, player_transform)) = players.get(*player_entity) {
+                        if let Ok((_, _, player_transform, _)) = players.get(*player_entity) {
                             cast_at[1] = player_transform.translation[1];
 
                             let direction =
@@ -192,7 +209,10 @@ fn server_update_system(
             let input: PlayerInput = bincode::deserialize(&message).unwrap();
             client_ticks.0.insert(client_id, input.most_recent_tick);
             if let Some(player_entity) = lobby.players.get(&client_id) {
-                commands.entity(*player_entity).insert(input);
+                if let Ok((_, _, _, mut player_input_queue)) = players.get_mut(*player_entity) {
+                    // commands.entity(*player_entity).insert(input);
+                    player_input_queue.queue.push_back(input)
+                }
             }
         }
     }
@@ -222,6 +242,7 @@ fn update_visulizer_system(
 
 struct SendTickTimer(Timer);
 
+/// send out NetworkFrame messages to clients
 #[allow(clippy::type_complexity)]
 fn server_network_sync(
     mut tick: ResMut<NetworkTick>,
@@ -229,11 +250,17 @@ fn server_network_sync(
     time: Res<Time>,
     mut timer: ResMut<SendTickTimer>,
     networked_entities: Query<(Entity, &Transform), Or<(With<Player>, With<Projectile>)>>,
+    player_query: Query<&PlayerInputQueue>,
 ) {
     let mut frame = NetworkFrame::default();
     for (entity, transform) in networked_entities.iter() {
         frame.entities.entities.push(entity);
         frame.entities.translations.push(transform.translation);
+    }
+
+    // FIXME: HACK, this assumes exactly one connected client
+    if let Ok(player_input_queue) = player_query.get_single() {
+        frame.last_player_input = player_input_queue.last_applied_serial;
     }
 
     frame.tick = tick.0;
@@ -245,13 +272,21 @@ fn server_network_sync(
     }
 }
 
-fn move_players_system(mut query: Query<(&mut Velocity, &PlayerInput)>) {
-    for (mut velocity, input) in query.iter_mut() {
-        let x = (input.right as i8 - input.left as i8) as f32;
-        let y = (input.down as i8 - input.up as i8) as f32;
-        let direction = Vec2::new(x, y).normalize_or_zero();
-        velocity.linvel.x = direction.x * PLAYER_MOVE_SPEED;
-        velocity.linvel.z = direction.y * PLAYER_MOVE_SPEED;
+// apply PlayerInput to client entities
+fn move_players_system(mut query: Query<(&mut Transform, &mut PlayerInputQueue)>) {
+    for (mut transform, mut input_queue) in query.iter_mut() {
+        while let Some(input) = input_queue.queue.pop_front() {
+            info!("apply player input: {}", input.serial);
+            let x = (input.right as i8 - input.left as i8) as f32;
+            let y = (input.down as i8 - input.up as i8) as f32;
+            let direction = Vec2::new(x, y).normalize_or_zero();
+            let offs = direction * PLAYER_MOVE_SPEED * (1.0 / 60.0);
+            transform.translation.x += offs.x;
+            transform.translation.z += offs.y;
+            input_queue.last_applied_serial = input.serial;
+            // velocity.linvel.x = direction.x * PLAYER_MOVE_SPEED;
+            // velocity.linvel.z = direction.y * PLAYER_MOVE_SPEED;
+        }
     }
 }
 

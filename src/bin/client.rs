@@ -16,7 +16,8 @@ use bevy_renet::{
 use rand::Rng;
 use renet_test::{
     client_connection_config, exit_on_esc_system, setup_level, ClientChannel, NetworkFrame,
-    PlayerCommand, PlayerInput, Ray3d, ServerChannel, ServerMessages, PROTOCOL_ID,
+    PlayerCommand, PlayerInput, Ray3d, ServerChannel, ServerMessages, PLAYER_MOVE_SPEED,
+    PROTOCOL_ID,
 };
 use renet_visualizer::{RenetClientVisualizer, RenetVisualizerStyle};
 use smooth_bevy_cameras::{LookTransform, LookTransformBundle, LookTransformPlugin, Smoother};
@@ -46,6 +47,7 @@ struct PlayerInputQueue {
     queue: VecDeque<PlayerInput>,
     entity: Option<Entity>,
     last_update_tick: Option<u32>,
+    last_server_serial: u32,
 }
 
 fn new_renet_client() -> RenetClient {
@@ -148,7 +150,9 @@ fn player_input(
     mut player_commands: EventWriter<PlayerCommand>,
     most_recent_tick: Res<MostRecentTick>,
     mut player_input_queue: ResMut<PlayerInputQueue>,
+    mut client: ResMut<RenetClient>,
 ) {
+    player_input.serial += 1;
     player_input.left = keyboard_input.pressed(KeyCode::A) || keyboard_input.pressed(KeyCode::Left);
     player_input.right =
         keyboard_input.pressed(KeyCode::D) || keyboard_input.pressed(KeyCode::Right);
@@ -157,6 +161,11 @@ fn player_input(
     player_input.most_recent_tick = most_recent_tick.0;
 
     player_input_queue.queue.push_back(*player_input);
+
+    {
+        let input_message = bincode::serialize(&*player_input).unwrap();
+        client.send_message(ClientChannel::Input.id(), input_message);
+    }
 
     if mouse_button_input.just_pressed(MouseButton::Left) {
         let target_transform = target_query.single();
@@ -168,9 +177,8 @@ fn player_input(
 
 /// serialize and send PlayerInput to server on ClientChannel::Input
 fn client_send_input(player_input: Res<PlayerInput>, mut client: ResMut<RenetClient>) {
-    let input_message = bincode::serialize(&*player_input).unwrap();
-
-    client.send_message(ClientChannel::Input.id(), input_message);
+    // let input_message = bincode::serialize(&*player_input).unwrap();
+    // client.send_message(ClientChannel::Input.id(), input_message);
 }
 
 /// serialize and send PlayerCommand to server on ClientChannel::Command
@@ -203,6 +211,7 @@ fn client_sync_players(
     mut network_mapping: ResMut<NetworkMapping>,
     mut most_recent_tick: ResMut<MostRecentTick>,
     mut player_input_queue: ResMut<PlayerInputQueue>,
+    mut transform_query: Query<&mut Transform>,
 ) {
     let client_id = client.client_id();
     while let Some(message) = client.receive_message(ServerChannel::ServerMessages.id()) {
@@ -282,32 +291,66 @@ fn client_sync_players(
                     translation,
                     ..Default::default()
                 };
-                info!("apply transform {:?} {:?}", entity, transform);
-                commands.entity(*entity).insert(transform);
+
+                if let Ok(old_transform) = transform_query.get(*entity) {
+                    info!(
+                        "apply transform {} {:?} -> {:?} {:?}",
+                        frame.last_player_input,
+                        entity,
+                        transform.translation,
+                        old_transform.translation
+                    );
+                }
+                commands
+                    .entity(*entity)
+                    .insert(TransformFromServer(transform));
                 if player_input_queue.entity == Some(*entity) {
                     info!("update for player input queue");
                     player_input_queue.last_update_tick = Some(frame.tick);
+                    player_input_queue.last_server_serial = frame.last_player_input;
                 }
             }
         }
     }
 }
 
+#[derive(Component)]
+struct TransformFromServer(Transform);
+
 fn client_predict_input(
     mut player_input_queue: ResMut<PlayerInputQueue>,
-    mut transform_query: Query<&mut Transform>,
+    mut transform_query: Query<(&mut Transform, &TransformFromServer)>,
     time: Res<Time>,
 ) {
     if let (Some(entity), Some(last_tick)) = (
         player_input_queue.entity,
         player_input_queue.last_update_tick,
     ) {
+        // if let Ok(mut transform) = transform_query.get_mut(entity) {
+        //     while let Some(input) = player_input_queue.queue.pop_front() {
+        //         let x = (input.right as i8 - input.left as i8) as f32;
+        //         let y = (input.down as i8 - input.up as i8) as f32;
+        //         let direction = Vec2::new(x, y).normalize_or_zero();
+
+        //         let offs = direction * PLAYER_MOVE_SPEED * (1.0 / 60.0);
+        //         transform.translation.x += offs.x;
+        //         transform.translation.z += offs.y;
+        //         info!(
+        //             "predict: {} {:?} {:?} {}",
+        //             input.serial,
+        //             offs,
+        //             transform.translation,
+        //             time.delta_seconds()
+        //         );
+        //     }
+        // }
         while let Some(input) = player_input_queue.queue.front() {
-            let do_pop = match input.most_recent_tick {
-                Some(tick) if tick < last_tick => true,
-                None => true,
-                _ => false,
-            };
+            // let do_pop = match input.most_recent_tick {
+            //     Some(tick) if tick < last_tick => true,
+            //     None => true,
+            //     _ => false,
+            // };
+            let do_pop = input.serial <= player_input_queue.last_server_serial;
             if do_pop {
                 info!("pop outdated");
                 player_input_queue.queue.pop_front();
@@ -316,19 +359,26 @@ fn client_predict_input(
             }
         }
 
-        if let Ok(mut transform) = transform_query.get_mut(entity) {
+        if let Ok((mut transform, transform_from_server)) = transform_query.get_mut(entity) {
+            *transform = transform_from_server.0;
+
             for input in &player_input_queue.queue {
                 let x = (input.right as i8 - input.left as i8) as f32;
                 let y = (input.down as i8 - input.up as i8) as f32;
                 let direction = Vec2::new(x, y).normalize_or_zero();
 
-                const PLAYER_MOVE_SPEED: f32 = 5.0;
-
-                transform.translation.x += direction.x * PLAYER_MOVE_SPEED * time.delta_seconds();
-                transform.translation.z += direction.y * PLAYER_MOVE_SPEED * time.delta_seconds();
+                let offs = direction * PLAYER_MOVE_SPEED * (1.0 / 60.0);
+                transform.translation.x += offs.x;
+                transform.translation.z += offs.y;
+                // info!(
+                //     "predict: {:?} {:?} {}",
+                //     offs,
+                //     transform.translation,
+                //     time.delta_seconds()
+                // );
             }
 
-            player_input_queue.queue.clear();
+            //     player_input_queue.queue.clear();
         }
     }
 }

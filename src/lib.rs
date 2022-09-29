@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 pub const PRIVATE_KEY: &[u8; NETCODE_KEY_BYTES] = b"an example very very secret key."; // 32-bytes
 pub const PROTOCOL_ID: u64 = 7;
 
+pub const PLAYER_MOVE_SPEED: f32 = 2.0;
+
 #[derive(Debug, Component)]
 pub struct Player {
     pub id: u64,
@@ -19,6 +21,7 @@ pub struct Player {
 #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, Component)]
 pub struct PlayerInput {
     pub most_recent_tick: Option<u32>,
+    pub serial: u32,
     pub up: bool,
     pub down: bool,
     pub left: bool,
@@ -69,6 +72,7 @@ pub struct NetworkedEntities {
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct NetworkFrame {
     pub tick: u32,
+    pub last_player_input: u32,
     pub entities: NetworkedEntities,
 }
 
