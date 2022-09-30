@@ -42,7 +42,7 @@ struct ClientLobby {
 #[derive(Debug)]
 struct MostRecentTick(Option<u32>);
 
-#[derive(Default)]
+#[derive(Component, Default)]
 struct PlayerInputQueue {
     queue: VecDeque<PlayerInput>,
     last_server_serial: u32,
@@ -93,7 +93,7 @@ fn main() {
     app.insert_resource(MostRecentTick(None));
     app.insert_resource(new_renet_client());
     app.insert_resource(NetworkMapping::default());
-    app.insert_resource(PlayerInputQueue::default());
+    // app.insert_resource(PlayerInputQueue::default());
 
     app.add_system(player_input);
     app.add_system(camera_follow);
@@ -101,7 +101,12 @@ fn main() {
     app.add_system(client_send_input.with_run_criteria(run_if_client_connected));
     app.add_system(client_send_player_commands.with_run_criteria(run_if_client_connected));
     app.add_system(client_sync_players.with_run_criteria(run_if_client_connected));
-    app.add_system(client_predict_input.with_run_criteria(run_if_client_connected));
+    app.add_system(
+        client_predict_input
+            .with_run_criteria(run_if_client_connected)
+            .after(player_input)
+            .after(client_sync_players),
+    );
 
     app.add_system(exit_on_esc_system);
 
@@ -142,6 +147,7 @@ fn update_visulizer_system(
 }
 
 /// read input into PlayerInput resource and enqueue PlayerCommand::BasicAttack
+#[allow(clippy::too_many_arguments)]
 fn player_input(
     keyboard_input: Res<Input<KeyCode>>,
     mut player_input: ResMut<PlayerInput>,
@@ -149,7 +155,7 @@ fn player_input(
     target_query: Query<&Transform, With<Target>>,
     mut player_commands: EventWriter<PlayerCommand>,
     most_recent_tick: Res<MostRecentTick>,
-    mut player_input_queue: ResMut<PlayerInputQueue>,
+    mut player_input_queue: Query<&mut PlayerInputQueue, With<ControlledPlayer>>,
     mut client: ResMut<RenetClient>,
 ) {
     player_input.serial += 1;
@@ -160,8 +166,9 @@ fn player_input(
     player_input.down = keyboard_input.pressed(KeyCode::S) || keyboard_input.pressed(KeyCode::Down);
     player_input.most_recent_tick = most_recent_tick.0;
 
-    player_input_queue.queue.push_back(*player_input);
-
+    if let Ok(mut player_input_queue) = player_input_queue.get_single_mut() {
+        player_input_queue.queue.push_back(*player_input);
+    }
     {
         let input_message = bincode::serialize(&*player_input).unwrap();
         client.send_message(ClientChannel::Input.id(), input_message);
@@ -212,9 +219,11 @@ fn client_sync_players(
     mut lobby: ResMut<ClientLobby>,
     mut network_mapping: ResMut<NetworkMapping>,
     mut most_recent_tick: ResMut<MostRecentTick>,
-    mut player_input_queue: ResMut<PlayerInputQueue>,
-    transform_query: Query<&Transform>,
-    controlled_player: Query<&ControlledPlayer>,
+    mut transform_query: Query<&mut Transform>,
+    mut controlled_player: Query<
+        (&mut PlayerInputQueue, &mut TransformFromServer),
+        With<ControlledPlayer>,
+    >,
 ) {
     let client_id = client.client_id();
     while let Some(message) = client.receive_message(ServerChannel::ServerMessages.id()) {
@@ -235,7 +244,10 @@ fn client_sync_players(
 
                 if client_id == id {
                     info!("controlled player");
-                    client_entity.insert(ControlledPlayer);
+                    client_entity
+                        .insert(ControlledPlayer)
+                        .insert(PlayerInputQueue::default())
+                        .insert(TransformFromServer::default());
                 }
 
                 let player_info = PlayerInfo {
@@ -305,40 +317,53 @@ fn client_sync_players(
                     );
                 }
 
-                if controlled_player.contains(*entity) {
-                    commands
-                        .entity(*entity)
-                        .insert(TransformFromServer(transform));
+                if let Ok((mut player_input_queue, mut transform_from_server)) =
+                    controlled_player.get_mut(*entity)
+                {
+                    *transform_from_server = TransformFromServer(transform);
                     player_input_queue.last_server_serial = frame.last_player_input;
-                } else {
-                    commands.entity(*entity).insert(transform);
+                }
+                if let Ok(mut ent_transform) = transform_query.get_mut(*entity) {
+                    *ent_transform = transform;
                 }
             }
         }
     }
 }
 
-#[derive(Component)]
+#[derive(Component, Default)]
 struct TransformFromServer(Transform);
 
 fn client_predict_input(
-    mut player_input_queue: ResMut<PlayerInputQueue>,
-    mut transform_query: Query<(&mut Transform, &TransformFromServer), With<ControlledPlayer>>,
-    time: Res<Time>,
+    mut transform_query: Query<
+        (&mut Transform, &TransformFromServer, &mut PlayerInputQueue),
+        With<ControlledPlayer>,
+    >,
 ) {
-    while let Some(input) = player_input_queue.queue.front() {
-        let do_pop = input.serial <= player_input_queue.last_server_serial;
-        if do_pop {
-            debug!("pop outdated");
-            player_input_queue.queue.pop_front();
-        } else {
-            break;
+    if let Ok((mut transform, transform_from_server, mut player_input_queue)) =
+        transform_query.get_single_mut()
+    {
+        let mut pop_min = u32::MAX;
+        let mut pop_max = u32::MIN;
+        while let Some(input) = player_input_queue.queue.front() {
+            let do_pop = input.serial <= player_input_queue.last_server_serial;
+            if do_pop {
+                if do_pop {
+                    pop_min = pop_min.min(input.serial);
+                    pop_max = pop_max.max(input.serial);
+                }
+                player_input_queue.queue.pop_front();
+            } else {
+                break;
+            }
         }
-    }
-
-    if let Ok((mut transform, transform_from_server)) = transform_query.get_single_mut() {
+        if pop_min != u32::MAX {
+            debug!("pop {}-{}", pop_min, pop_max);
+        }
         *transform = transform_from_server.0;
 
+        let mut apply_min = u32::MAX;
+        let mut apply_max = u32::MIN;
         for input in &player_input_queue.queue {
             let x = (input.right as i8 - input.left as i8) as f32;
             let y = (input.down as i8 - input.up as i8) as f32;
@@ -347,7 +372,13 @@ fn client_predict_input(
             let offs = direction * PLAYER_MOVE_SPEED * (1.0 / 60.0);
             transform.translation.x += offs.x;
             transform.translation.z += offs.y;
+            apply_min = apply_min.min(input.serial);
+            apply_max = apply_max.max(input.serial);
         }
+        debug!(
+            "apply {}-{}: {:?}",
+            apply_min, apply_max, transform.translation
+        );
     } else {
         warn!("no controlled player");
     }
