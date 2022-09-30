@@ -204,6 +204,8 @@ fn client_send_player_commands(
 /// - update most_recent_tick
 /// - deserialize & apply transformation updates to entities
 ///
+
+#[allow(clippy::too_many_arguments)]
 fn client_sync_players(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -213,7 +215,7 @@ fn client_sync_players(
     mut network_mapping: ResMut<NetworkMapping>,
     mut most_recent_tick: ResMut<MostRecentTick>,
     mut player_input_queue: ResMut<PlayerInputQueue>,
-    mut transform_query: Query<&mut Transform>,
+    transform_query: Query<&Transform>,
 ) {
     let client_id = client.client_id();
     while let Some(message) = client.receive_message(ServerChannel::ServerMessages.id()) {
@@ -235,6 +237,7 @@ fn client_sync_players(
                 if client_id == id {
                     info!("controlled player");
                     client_entity.insert(ControlledPlayer);
+                    player_input_queue.entity = Some(client_entity.id());
                 }
 
                 let player_info = PlayerInfo {
@@ -243,7 +246,6 @@ fn client_sync_players(
                 };
                 lobby.players.insert(id, player_info);
                 network_mapping.0.insert(entity, client_entity.id());
-                player_input_queue.entity = Some(client_entity.id());
             }
             ServerMessages::PlayerRemove { id } => {
                 println!("Player {} disconnected.", id);
@@ -304,9 +306,13 @@ fn client_sync_players(
                         old_transform.translation
                     );
                 }
-                commands
-                    .entity(*entity)
-                    .insert(TransformFromServer(transform));
+                if Some(*entity) == player_input_queue.entity {
+                    commands
+                        .entity(*entity)
+                        .insert(TransformFromServer(transform));
+                } else {
+                    commands.entity(*entity).insert(transform);
+                }
                 if player_input_queue.entity == Some(*entity) {
                     debug!("update for player input queue");
                     player_input_queue.last_update_tick = Some(frame.tick);
@@ -329,30 +335,7 @@ fn client_predict_input(
         player_input_queue.entity,
         player_input_queue.last_update_tick,
     ) {
-        // if let Ok(mut transform) = transform_query.get_mut(entity) {
-        //     while let Some(input) = player_input_queue.queue.pop_front() {
-        //         let x = (input.right as i8 - input.left as i8) as f32;
-        //         let y = (input.down as i8 - input.up as i8) as f32;
-        //         let direction = Vec2::new(x, y).normalize_or_zero();
-
-        //         let offs = direction * PLAYER_MOVE_SPEED * (1.0 / 60.0);
-        //         transform.translation.x += offs.x;
-        //         transform.translation.z += offs.y;
-        //         info!(
-        //             "predict: {} {:?} {:?} {}",
-        //             input.serial,
-        //             offs,
-        //             transform.translation,
-        //             time.delta_seconds()
-        //         );
-        //     }
-        // }
         while let Some(input) = player_input_queue.queue.front() {
-            // let do_pop = match input.most_recent_tick {
-            //     Some(tick) if tick < last_tick => true,
-            //     None => true,
-            //     _ => false,
-            // };
             let do_pop = input.serial <= player_input_queue.last_server_serial;
             if do_pop {
                 debug!("pop outdated");
@@ -373,15 +356,9 @@ fn client_predict_input(
                 let offs = direction * PLAYER_MOVE_SPEED * (1.0 / 60.0);
                 transform.translation.x += offs.x;
                 transform.translation.z += offs.y;
-                // info!(
-                //     "predict: {:?} {:?} {}",
-                //     offs,
-                //     transform.translation,
-                //     time.delta_seconds()
-                // );
             }
-
-            //     player_input_queue.queue.clear();
+        } else {
+            warn!("no controlled player");
         }
     }
 }
