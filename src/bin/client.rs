@@ -58,6 +58,7 @@ fn new_renet_client() -> RenetClient {
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap();
     let client_id = current_time.as_millis() as u64;
+    info!("client id 1: {}", client_id);
     let authentication = ClientAuthentication::Unsecure {
         client_id,
         protocol_id: PROTOCOL_ID,
@@ -65,7 +66,8 @@ fn new_renet_client() -> RenetClient {
         user_data: None,
     };
     // ran
-    let client_id = rand::thread_rng().gen();
+    // let client_id = rand::thread_rng().gen();
+    // info!("client id 2: {}", client_id);
 
     RenetClient::new(
         current_time,
@@ -83,7 +85,7 @@ fn main() {
     app.add_plugin(RenetClientPlugin);
     app.add_plugin(LookTransformPlugin);
     app.add_plugin(FrameTimeDiagnosticsPlugin::default());
-    app.add_plugin(LogDiagnosticsPlugin::default());
+    // app.add_plugin(LogDiagnosticsPlugin::default());
     app.add_plugin(EguiPlugin);
 
     app.add_event::<PlayerCommand>();
@@ -222,7 +224,7 @@ fn client_sync_players(
                 translation,
                 entity,
             } => {
-                println!("Player {} connected.", id);
+                info!("Player {} connected. {}", id, client_id);
                 let mut client_entity = commands.spawn_bundle(PbrBundle {
                     mesh: meshes.add(Mesh::from(shape::Capsule::default())),
                     material: materials.add(Color::rgb(0.8, 0.7, 0.6).into()),
@@ -231,6 +233,7 @@ fn client_sync_players(
                 });
 
                 if client_id == id {
+                    info!("controlled player");
                     client_entity.insert(ControlledPlayer);
                 }
 
@@ -293,7 +296,7 @@ fn client_sync_players(
                 };
 
                 if let Ok(old_transform) = transform_query.get(*entity) {
-                    info!(
+                    debug!(
                         "apply transform {} {:?} -> {:?} {:?}",
                         frame.last_player_input,
                         entity,
@@ -305,7 +308,7 @@ fn client_sync_players(
                     .entity(*entity)
                     .insert(TransformFromServer(transform));
                 if player_input_queue.entity == Some(*entity) {
-                    info!("update for player input queue");
+                    debug!("update for player input queue");
                     player_input_queue.last_update_tick = Some(frame.tick);
                     player_input_queue.last_server_serial = frame.last_player_input;
                 }
@@ -319,7 +322,7 @@ struct TransformFromServer(Transform);
 
 fn client_predict_input(
     mut player_input_queue: ResMut<PlayerInputQueue>,
-    mut transform_query: Query<(&mut Transform, &TransformFromServer)>,
+    mut transform_query: Query<(&mut Transform, &TransformFromServer), With<ControlledPlayer>>,
     time: Res<Time>,
 ) {
     if let (Some(entity), Some(last_tick)) = (
@@ -352,7 +355,7 @@ fn client_predict_input(
             // };
             let do_pop = input.serial <= player_input_queue.last_server_serial;
             if do_pop {
-                info!("pop outdated");
+                debug!("pop outdated");
                 player_input_queue.queue.pop_front();
             } else {
                 break;

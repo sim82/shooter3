@@ -53,7 +53,7 @@ fn main() {
     app.add_plugin(RapierPhysicsPlugin::<NoUserData>::default());
     app.add_plugin(RapierDebugRenderPlugin::default());
     app.add_plugin(FrameTimeDiagnosticsPlugin::default());
-    app.add_plugin(LogDiagnosticsPlugin::default());
+    // app.add_plugin(LogDiagnosticsPlugin::default());
     app.add_plugin(EguiPlugin);
 
     app.insert_resource(ServerLobby::default());
@@ -108,7 +108,7 @@ fn server_update_system(
     for event in server_events.iter() {
         match event {
             ServerEvent::ClientConnected(id, _) => {
-                println!("Player {} connected.", id);
+                info!("Player {} connected.", id);
                 visualizer.add_client(*id);
 
                 // Initialize other players for this new client
@@ -250,7 +250,7 @@ fn server_network_sync(
     time: Res<Time>,
     mut timer: ResMut<SendTickTimer>,
     networked_entities: Query<(Entity, &Transform), Or<(With<Player>, With<Projectile>)>>,
-    player_query: Query<&PlayerInputQueue>,
+    player_query: Query<(&PlayerInputQueue, &Player)>,
 ) {
     let mut frame = NetworkFrame::default();
     for (entity, transform) in networked_entities.iter() {
@@ -259,16 +259,17 @@ fn server_network_sync(
     }
 
     // FIXME: HACK, this assumes exactly one connected client
-    if let Ok(player_input_queue) = player_query.get_single() {
-        frame.last_player_input = player_input_queue.last_applied_serial;
-    }
 
     frame.tick = tick.0;
     tick.0 += 1;
-    let sync_message = bincode::serialize(&frame).unwrap();
     timer.0.tick(time.delta());
     if timer.0.just_finished() {
-        server.broadcast_message(ServerChannel::NetworkFrame.id(), sync_message);
+        for (player_input_queue, player) in &player_query {
+            frame.last_player_input = player_input_queue.last_applied_serial;
+            let sync_message = bincode::serialize(&frame).unwrap();
+            // server.broadcast_message(ServerChannel::NetworkFrame.id(), sync_message);
+            server.send_message(player.id, ServerChannel::NetworkFrame.id(), sync_message);
+        }
     }
 }
 
@@ -276,7 +277,7 @@ fn server_network_sync(
 fn move_players_system(mut query: Query<(&mut Transform, &mut PlayerInputQueue)>) {
     for (mut transform, mut input_queue) in query.iter_mut() {
         while let Some(input) = input_queue.queue.pop_front() {
-            info!("apply player input: {}", input.serial);
+            debug!("apply player input: {}", input.serial);
             let x = (input.right as i8 - input.left as i8) as f32;
             let y = (input.down as i8 - input.up as i8) as f32;
             let direction = Vec2::new(x, y).normalize_or_zero();
