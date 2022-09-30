@@ -45,8 +45,6 @@ struct MostRecentTick(Option<u32>);
 #[derive(Default)]
 struct PlayerInputQueue {
     queue: VecDeque<PlayerInput>,
-    entity: Option<Entity>,
-    last_update_tick: Option<u32>,
     last_server_serial: u32,
 }
 
@@ -216,6 +214,7 @@ fn client_sync_players(
     mut most_recent_tick: ResMut<MostRecentTick>,
     mut player_input_queue: ResMut<PlayerInputQueue>,
     transform_query: Query<&Transform>,
+    controlled_player: Query<&ControlledPlayer>,
 ) {
     let client_id = client.client_id();
     while let Some(message) = client.receive_message(ServerChannel::ServerMessages.id()) {
@@ -237,7 +236,6 @@ fn client_sync_players(
                 if client_id == id {
                     info!("controlled player");
                     client_entity.insert(ControlledPlayer);
-                    player_input_queue.entity = Some(client_entity.id());
                 }
 
                 let player_info = PlayerInfo {
@@ -306,17 +304,14 @@ fn client_sync_players(
                         old_transform.translation
                     );
                 }
-                if Some(*entity) == player_input_queue.entity {
+
+                if controlled_player.contains(*entity) {
                     commands
                         .entity(*entity)
                         .insert(TransformFromServer(transform));
+                    player_input_queue.last_server_serial = frame.last_player_input;
                 } else {
                     commands.entity(*entity).insert(transform);
-                }
-                if player_input_queue.entity == Some(*entity) {
-                    debug!("update for player input queue");
-                    player_input_queue.last_update_tick = Some(frame.tick);
-                    player_input_queue.last_server_serial = frame.last_player_input;
                 }
             }
         }
@@ -331,35 +326,30 @@ fn client_predict_input(
     mut transform_query: Query<(&mut Transform, &TransformFromServer), With<ControlledPlayer>>,
     time: Res<Time>,
 ) {
-    if let (Some(entity), Some(last_tick)) = (
-        player_input_queue.entity,
-        player_input_queue.last_update_tick,
-    ) {
-        while let Some(input) = player_input_queue.queue.front() {
-            let do_pop = input.serial <= player_input_queue.last_server_serial;
-            if do_pop {
-                debug!("pop outdated");
-                player_input_queue.queue.pop_front();
-            } else {
-                break;
-            }
-        }
-
-        if let Ok((mut transform, transform_from_server)) = transform_query.get_mut(entity) {
-            *transform = transform_from_server.0;
-
-            for input in &player_input_queue.queue {
-                let x = (input.right as i8 - input.left as i8) as f32;
-                let y = (input.down as i8 - input.up as i8) as f32;
-                let direction = Vec2::new(x, y).normalize_or_zero();
-
-                let offs = direction * PLAYER_MOVE_SPEED * (1.0 / 60.0);
-                transform.translation.x += offs.x;
-                transform.translation.z += offs.y;
-            }
+    while let Some(input) = player_input_queue.queue.front() {
+        let do_pop = input.serial <= player_input_queue.last_server_serial;
+        if do_pop {
+            debug!("pop outdated");
+            player_input_queue.queue.pop_front();
         } else {
-            warn!("no controlled player");
+            break;
         }
+    }
+
+    if let Ok((mut transform, transform_from_server)) = transform_query.get_single_mut() {
+        *transform = transform_from_server.0;
+
+        for input in &player_input_queue.queue {
+            let x = (input.right as i8 - input.left as i8) as f32;
+            let y = (input.down as i8 - input.up as i8) as f32;
+            let direction = Vec2::new(x, y).normalize_or_zero();
+
+            let offs = direction * PLAYER_MOVE_SPEED * (1.0 / 60.0);
+            transform.translation.x += offs.x;
+            transform.translation.z += offs.y;
+        }
+    } else {
+        warn!("no controlled player");
     }
 }
 
