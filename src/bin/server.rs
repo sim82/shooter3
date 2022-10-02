@@ -4,11 +4,7 @@ use std::{
     time::SystemTime,
 };
 
-use bevy::{
-    diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
-    math::Vec3Swizzles,
-    prelude::*,
-};
+use bevy::{diagnostic::FrameTimeDiagnosticsPlugin, math::Vec3Swizzles, prelude::*};
 use bevy_egui::{EguiContext, EguiPlugin};
 use bevy_rapier3d::prelude::*;
 use bevy_renet::{
@@ -265,7 +261,6 @@ fn server_network_sync(
         frame.entities.entities.push(entity);
         frame.entities.translations.push(transform.translation);
         frame.entities.velocities.push(velocity.velocity);
-        // frame.entities.velocities.push(Vec3::ZERO);
     }
 
     for (entity, transform, velocity) in projectiles.iter() {
@@ -273,8 +268,6 @@ fn server_network_sync(
         frame.entities.translations.push(transform.translation);
         frame.entities.velocities.push(velocity.linvel);
     }
-
-    // FIXME: HACK, this assumes exactly one connected client
 
     frame.tick = tick.0;
     tick.0 += 1;

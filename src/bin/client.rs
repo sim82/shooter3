@@ -369,7 +369,6 @@ fn client_sync_players(
                 if let Ok((mut transform_from_server, mut extrapolate)) =
                     extrapolate.get_mut(*entity)
                 {
-                    info!("update extrapolate");
                     *transform_from_server = TransformFromServer(transform);
                     extrapolate.base_tick = frame.tick;
                     extrapolate.velocity = frame.entities.velocities[i];
@@ -436,11 +435,8 @@ fn predict_entities(
 ) {
     if let Some(mut tick) = most_recent_tick {
         for (mut transform, transform_from_server, extrapolate) in &mut transform_query {
-            let predict_ticks = tick.predicted - extrapolate.base_tick;
-            let predict_f = (predict_ticks as f32) / 60.0;
-
             transform.translation =
-                transform_from_server.0.translation + extrapolate.velocity * predict_f;
+                extrapolate.apply(tick.predicted, transform_from_server.0.translation);
             debug!(
                 "predict: {:?} {:?} {:?}",
                 transform.translation, transform_from_server, extrapolate
