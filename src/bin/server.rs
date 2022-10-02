@@ -6,6 +6,7 @@ use std::{
 
 use bevy::{
     diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
+    math::Vec3Swizzles,
     prelude::*,
 };
 use bevy_egui::{EguiContext, EguiPlugin};
@@ -60,7 +61,7 @@ fn main() {
         .insert_resource(ClientTicks::default())
         .insert_resource(new_renet_server())
         .insert_resource(RenetServerVisualizer::<200>::default())
-        .insert_resource(SendTickTimer(Timer::from_seconds(1.0 / 15.0, true)));
+        .insert_resource(SendTickTimer(Timer::from_seconds(5.0 / 60.0, true)));
 
     app.add_system(server_update_system)
         .add_system(server_network_sync)
@@ -82,6 +83,11 @@ fn main() {
 struct PlayerInputQueue {
     queue: VecDeque<PlayerInput>,
     last_applied_serial: u32,
+}
+
+#[derive(Component, Default)]
+struct PlayerVelocity {
+    velocity: Vec3,
 }
 
 ///
@@ -137,6 +143,7 @@ fn server_update_system(
                     .insert(PlayerInput::default())
                     // .insert(Velocity::default())
                     .insert(PlayerInputQueue::default())
+                    .insert(PlayerVelocity::default())
                     .insert(Player { id: *id })
                     .id();
 
@@ -248,14 +255,20 @@ fn server_network_sync(
     mut server: ResMut<RenetServer>,
     time: Res<Time>,
     mut timer: ResMut<SendTickTimer>,
-    networked_entities: Query<
-        (Entity, &Transform, &Velocity),
-        Or<(With<Player>, With<Projectile>)>,
-    >,
+    players: Query<(Entity, &Transform, &PlayerVelocity), (Without<Projectile>, With<Player>)>,
+    projectiles: Query<(Entity, &Transform, &Velocity), With<Projectile>>,
     player_query: Query<(&PlayerInputQueue, &Player)>,
 ) {
     let mut frame = NetworkFrame::default();
-    for (entity, transform, velocity) in networked_entities.iter() {
+
+    for (entity, transform, velocity) in players.iter() {
+        frame.entities.entities.push(entity);
+        frame.entities.translations.push(transform.translation);
+        frame.entities.velocities.push(velocity.velocity);
+        // frame.entities.velocities.push(Vec3::ZERO);
+    }
+
+    for (entity, transform, velocity) in projectiles.iter() {
         frame.entities.entities.push(entity);
         frame.entities.translations.push(transform.translation);
         frame.entities.velocities.push(velocity.linvel);
@@ -278,8 +291,10 @@ fn server_network_sync(
 }
 
 // apply PlayerInput to client entities
-fn move_players_system(mut query: Query<(&mut Transform, &mut PlayerInputQueue)>) {
-    for (mut transform, mut input_queue) in query.iter_mut() {
+fn move_players_system(
+    mut query: Query<(&mut Transform, &mut PlayerInputQueue, &mut PlayerVelocity)>,
+) {
+    for (mut transform, mut input_queue, mut player_velocity) in query.iter_mut() {
         while let Some(input) = input_queue.queue.pop_front() {
             debug!("apply player input: {}", input.serial);
             let x = (input.right as i8 - input.left as i8) as f32;
@@ -288,6 +303,7 @@ fn move_players_system(mut query: Query<(&mut Transform, &mut PlayerInputQueue)>
             let offs = direction * PLAYER_MOVE_SPEED * (1.0 / 60.0);
             transform.translation.x += offs.x;
             transform.translation.z += offs.y;
+            player_velocity.velocity = (direction * PLAYER_MOVE_SPEED).extend(0.0).xzy();
             input_queue.last_applied_serial = input.serial;
             // velocity.linvel.x = direction.x * PLAYER_MOVE_SPEED;
             // velocity.linvel.z = direction.y * PLAYER_MOVE_SPEED;

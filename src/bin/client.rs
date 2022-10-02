@@ -262,10 +262,12 @@ fn client_sync_players(
                     info!("controlled player");
                     client_entity
                         .insert(ControlledPlayer)
-                        .insert(PlayerInputQueue::default())
-                        .insert(TransformFromServer::default());
+                        .insert(PlayerInputQueue::default());
+                } else {
+                    client_entity.insert(VelocityExtrapolate::default());
                 }
 
+                client_entity.insert(TransformFromServer::default());
                 let player_info = PlayerInfo {
                     server_entity: entity,
                     client_entity: client_entity.id(),
@@ -331,6 +333,13 @@ fn client_sync_players(
         }
 
         for i in 0..frame.entities.entities.len() {
+            info!(
+                "entity {} {:?} -> {:?}",
+                i,
+                frame.entities.entities[i],
+                network_mapping.0.get(&frame.entities.entities[i])
+            );
+
             if let Some(entity) = network_mapping.0.get(&frame.entities.entities[i]) {
                 let translation = frame.entities.translations[i];
                 let transform = Transform {
@@ -360,6 +369,7 @@ fn client_sync_players(
                 if let Ok((mut transform_from_server, mut extrapolate)) =
                     extrapolate.get_mut(*entity)
                 {
+                    info!("update extrapolate");
                     *transform_from_server = TransformFromServer(transform);
                     extrapolate.base_tick = frame.tick;
                     extrapolate.velocity = frame.entities.velocities[i];
@@ -431,7 +441,7 @@ fn predict_entities(
 
             transform.translation =
                 transform_from_server.0.translation + extrapolate.velocity * predict_f;
-            info!(
+            debug!(
                 "predict: {:?} {:?} {:?}",
                 transform.translation, transform_from_server, extrapolate
             );
