@@ -67,6 +67,7 @@ pub enum ServerMessages {
 pub struct NetworkedEntities {
     pub entities: Vec<Entity>,
     pub translations: Vec<Vec3>,
+    pub velocities: Vec<Vec3>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -264,5 +265,25 @@ pub fn exit_on_esc_system(
 ) {
     if keyboard_input.just_pressed(KeyCode::Escape) {
         app_exit_events.send_default();
+    }
+}
+
+pub mod predict {
+    use bevy::prelude::*;
+
+    #[derive(Component, Default, Debug)]
+    pub struct VelocityExtrapolate {
+        pub velocity: Vec3,
+        pub base_tick: u32,
+    }
+
+    impl VelocityExtrapolate {
+        pub fn apply(&self, tick: u32, base_translation: Vec3) -> Vec3 {
+            if tick <= self.base_tick {
+                return base_translation;
+            }
+            let ticks = tick - self.base_tick;
+            todo!()
+        }
     }
 }

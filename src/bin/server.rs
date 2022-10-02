@@ -49,32 +49,31 @@ fn main() {
     let mut app = App::new();
     app.add_plugins(DefaultPlugins);
 
-    app.add_plugin(RenetServerPlugin);
-    app.add_plugin(RapierPhysicsPlugin::<NoUserData>::default());
-    app.add_plugin(RapierDebugRenderPlugin::default());
-    app.add_plugin(FrameTimeDiagnosticsPlugin::default());
-    // app.add_plugin(LogDiagnosticsPlugin::default());
-    app.add_plugin(EguiPlugin);
+    app.add_plugin(RenetServerPlugin)
+        .add_plugin(RapierPhysicsPlugin::<NoUserData>::default())
+        .add_plugin(RapierDebugRenderPlugin::default())
+        .add_plugin(FrameTimeDiagnosticsPlugin::default())
+        .add_plugin(EguiPlugin);
 
-    app.insert_resource(ServerLobby::default());
-    app.insert_resource(NetworkTick(0));
-    app.insert_resource(ClientTicks::default());
-    app.insert_resource(new_renet_server());
-    app.insert_resource(RenetServerVisualizer::<200>::default());
-    app.insert_resource(SendTickTimer(Timer::from_seconds(1.0, true)));
+    app.insert_resource(ServerLobby::default())
+        .insert_resource(NetworkTick(0))
+        .insert_resource(ClientTicks::default())
+        .insert_resource(new_renet_server())
+        .insert_resource(RenetServerVisualizer::<200>::default())
+        .insert_resource(SendTickTimer(Timer::from_seconds(1.0 / 15.0, true)));
 
-    app.add_system(server_update_system);
-    app.add_system(server_network_sync);
-    app.add_system(move_players_system);
-    app.add_system(update_projectiles_system);
-    app.add_system(update_visulizer_system);
-    app.add_system(despawn_projectile_system);
-    app.add_system(exit_on_esc_system);
+    app.add_system(server_update_system)
+        .add_system(server_network_sync)
+        .add_system(move_players_system)
+        .add_system(update_projectiles_system)
+        .add_system(update_visulizer_system)
+        .add_system(despawn_projectile_system)
+        .add_system(exit_on_esc_system);
 
     app.add_system_to_stage(CoreStage::PostUpdate, projectile_on_removal_system);
 
-    app.add_startup_system(setup_level);
-    app.add_startup_system(setup_simple_camera);
+    app.add_startup_system(setup_level)
+        .add_startup_system(setup_simple_camera);
 
     app.run();
 }
@@ -249,19 +248,24 @@ fn server_network_sync(
     mut server: ResMut<RenetServer>,
     time: Res<Time>,
     mut timer: ResMut<SendTickTimer>,
-    networked_entities: Query<(Entity, &Transform), Or<(With<Player>, With<Projectile>)>>,
+    networked_entities: Query<
+        (Entity, &Transform, &Velocity),
+        Or<(With<Player>, With<Projectile>)>,
+    >,
     player_query: Query<(&PlayerInputQueue, &Player)>,
 ) {
     let mut frame = NetworkFrame::default();
-    for (entity, transform) in networked_entities.iter() {
+    for (entity, transform, velocity) in networked_entities.iter() {
         frame.entities.entities.push(entity);
         frame.entities.translations.push(transform.translation);
+        frame.entities.velocities.push(velocity.linvel);
     }
 
     // FIXME: HACK, this assumes exactly one connected client
 
     frame.tick = tick.0;
     tick.0 += 1;
+    // info!("tick: {}", tick.0);
     timer.0.tick(time.delta());
     if timer.0.just_finished() {
         for (player_input_queue, player) in &player_query {

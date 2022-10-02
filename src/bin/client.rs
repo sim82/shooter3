@@ -4,20 +4,16 @@ use std::{
     time::SystemTime,
 };
 
-use bevy::{
-    diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
-    prelude::*,
-};
+use bevy::{diagnostic::FrameTimeDiagnosticsPlugin, prelude::*};
 use bevy_egui::{EguiContext, EguiPlugin};
 use bevy_renet::{
     renet::{ClientAuthentication, RenetClient, RenetError},
     run_if_client_connected, RenetClientPlugin,
 };
-use rand::Rng;
 use renet_test::{
-    client_connection_config, exit_on_esc_system, setup_level, ClientChannel, NetworkFrame,
-    PlayerCommand, PlayerInput, Ray3d, ServerChannel, ServerMessages, PLAYER_MOVE_SPEED,
-    PROTOCOL_ID,
+    client_connection_config, exit_on_esc_system, predict::VelocityExtrapolate, setup_level,
+    ClientChannel, NetworkFrame, PlayerCommand, PlayerInput, Ray3d, ServerChannel, ServerMessages,
+    PLAYER_MOVE_SPEED, PROTOCOL_ID,
 };
 use renet_visualizer::{RenetClientVisualizer, RenetVisualizerStyle};
 use smooth_bevy_cameras::{LookTransform, LookTransformBundle, LookTransformPlugin, Smoother};
@@ -40,13 +36,22 @@ struct ClientLobby {
 }
 
 #[derive(Debug)]
-struct MostRecentTick(Option<u32>);
+struct MostRecentTick {
+    from_server: u32,
+    predicted: u32,
+}
 
 #[derive(Component, Default)]
 struct PlayerInputQueue {
     queue: VecDeque<PlayerInput>,
     last_server_serial: u32,
 }
+
+#[derive(Component, Default, Debug)]
+struct TransformFromServer(Transform);
+
+#[derive(Component)]
+struct Target;
 
 fn new_renet_client() -> RenetClient {
     let server_addr = "127.0.0.1:5000".parse().unwrap();
@@ -90,7 +95,7 @@ fn main() {
 
     app.insert_resource(ClientLobby::default());
     app.insert_resource(PlayerInput::default());
-    app.insert_resource(MostRecentTick(None));
+
     app.insert_resource(new_renet_client());
     app.insert_resource(NetworkMapping::default());
     // app.insert_resource(PlayerInputQueue::default());
@@ -105,6 +110,11 @@ fn main() {
         client_predict_input
             .with_run_criteria(run_if_client_connected)
             .after(player_input)
+            .after(client_sync_players),
+    )
+    .add_system(
+        predict_entities
+            .with_run_criteria(run_if_client_connected)
             .after(client_sync_players),
     );
 
@@ -147,16 +157,14 @@ fn update_visulizer_system(
 }
 
 /// read input into PlayerInput resource and enqueue PlayerCommand::BasicAttack
-#[allow(clippy::too_many_arguments)]
+// #[allow(clippy::too_many_arguments)]
 fn player_input(
     keyboard_input: Res<Input<KeyCode>>,
     mut player_input: ResMut<PlayerInput>,
     mouse_button_input: Res<Input<MouseButton>>,
     target_query: Query<&Transform, With<Target>>,
     mut player_commands: EventWriter<PlayerCommand>,
-    most_recent_tick: Res<MostRecentTick>,
-    mut player_input_queue: Query<&mut PlayerInputQueue, With<ControlledPlayer>>,
-    mut client: ResMut<RenetClient>,
+    most_recent_tick: Option<Res<MostRecentTick>>,
 ) {
     player_input.serial += 1;
     player_input.left = keyboard_input.pressed(KeyCode::A) || keyboard_input.pressed(KeyCode::Left);
@@ -164,15 +172,7 @@ fn player_input(
         keyboard_input.pressed(KeyCode::D) || keyboard_input.pressed(KeyCode::Right);
     player_input.up = keyboard_input.pressed(KeyCode::W) || keyboard_input.pressed(KeyCode::Up);
     player_input.down = keyboard_input.pressed(KeyCode::S) || keyboard_input.pressed(KeyCode::Down);
-    player_input.most_recent_tick = most_recent_tick.0;
-
-    if let Ok(mut player_input_queue) = player_input_queue.get_single_mut() {
-        player_input_queue.queue.push_back(*player_input);
-    }
-    {
-        let input_message = bincode::serialize(&*player_input).unwrap();
-        client.send_message(ClientChannel::Input.id(), input_message);
-    }
+    player_input.most_recent_tick = most_recent_tick.as_ref().map(|tick| tick.from_server);
 
     if mouse_button_input.just_pressed(MouseButton::Left) {
         let target_transform = target_query.single();
@@ -180,10 +180,22 @@ fn player_input(
             cast_at: target_transform.translation,
         });
     }
+    // info!("most recent tick: {:?}", most_recent_tick);
 }
 
 /// serialize and send PlayerInput to server on ClientChannel::Input
-fn client_send_input(player_input: Res<PlayerInput>, mut client: ResMut<RenetClient>) {
+fn client_send_input(
+    player_input: Res<PlayerInput>,
+    mut client: ResMut<RenetClient>,
+    mut player_input_queue: Query<&mut PlayerInputQueue, With<ControlledPlayer>>,
+) {
+    if let Ok(mut player_input_queue) = player_input_queue.get_single_mut() {
+        player_input_queue.queue.push_back(*player_input);
+    }
+    {
+        let input_message = bincode::serialize(&*player_input).unwrap();
+        client.send_message(ClientChannel::Input.id(), input_message);
+    }
     // let input_message = bincode::serialize(&*player_input).unwrap();
     // client.send_message(ClientChannel::Input.id(), input_message);
 }
@@ -218,11 +230,15 @@ fn client_sync_players(
     mut client: ResMut<RenetClient>,
     mut lobby: ResMut<ClientLobby>,
     mut network_mapping: ResMut<NetworkMapping>,
-    mut most_recent_tick: ResMut<MostRecentTick>,
+    mut most_recent_tick: Option<ResMut<MostRecentTick>>,
     mut transform_query: Query<&mut Transform>,
     mut controlled_player: Query<
         (&mut PlayerInputQueue, &mut TransformFromServer),
         With<ControlledPlayer>,
+    >,
+    mut extrapolate: Query<
+        (&mut TransformFromServer, &mut VelocityExtrapolate),
+        Without<ControlledPlayer>,
     >,
 ) {
     let client_id = client.client_id();
@@ -272,7 +288,7 @@ fn client_sync_players(
                 entity,
                 translation,
             } => {
-                let projectile_entity = commands.spawn_bundle(PbrBundle {
+                let mut projectile_entity = commands.spawn_bundle(PbrBundle {
                     mesh: meshes.add(Mesh::from(shape::Icosphere {
                         radius: 0.1,
                         subdivisions: 5,
@@ -281,6 +297,9 @@ fn client_sync_players(
                     transform: Transform::from_translation(translation),
                     ..Default::default()
                 });
+                projectile_entity
+                    .insert(TransformFromServer::default())
+                    .insert(VelocityExtrapolate::default());
                 network_mapping.0.insert(entity, projectile_entity.id());
             }
             ServerMessages::DespawnProjectile { entity } => {
@@ -293,9 +312,21 @@ fn client_sync_players(
 
     while let Some(message) = client.receive_message(ServerChannel::NetworkFrame.id()) {
         let frame: NetworkFrame = bincode::deserialize(&message).unwrap();
-        match most_recent_tick.0 {
-            None => most_recent_tick.0 = Some(frame.tick),
-            Some(tick) if tick < frame.tick => most_recent_tick.0 = Some(frame.tick),
+        match most_recent_tick {
+            None => {
+                commands.insert_resource(MostRecentTick {
+                    from_server: frame.tick,
+                    predicted: frame.tick,
+                });
+            }
+            Some(ref mut tick) if tick.from_server < frame.tick => {
+                tick.from_server = frame.tick;
+                tick.predicted = frame.tick;
+                //  = Some(MostRecentTick {
+                //     from_server: frame.tick,
+                //     predicted: frame.tick,
+                // })
+            }
             _ => continue,
         }
 
@@ -326,19 +357,24 @@ fn client_sync_players(
                 if let Ok(mut ent_transform) = transform_query.get_mut(*entity) {
                     *ent_transform = transform;
                 }
+                if let Ok((mut transform_from_server, mut extrapolate)) =
+                    extrapolate.get_mut(*entity)
+                {
+                    *transform_from_server = TransformFromServer(transform);
+                    extrapolate.base_tick = frame.tick;
+                    extrapolate.velocity = frame.entities.velocities[i];
+                }
             }
         }
     }
 }
-
-#[derive(Component, Default)]
-struct TransformFromServer(Transform);
 
 fn client_predict_input(
     mut transform_query: Query<
         (&mut Transform, &TransformFromServer, &mut PlayerInputQueue),
         With<ControlledPlayer>,
     >,
+    // most_recent_tick: Option<ResMut<MostRecentTick>>,
 ) {
     if let Ok((mut transform, transform_from_server, mut player_input_queue)) =
         transform_query.get_single_mut()
@@ -384,9 +420,26 @@ fn client_predict_input(
     }
 }
 
-#[derive(Component)]
-struct Target;
+fn predict_entities(
+    most_recent_tick: Option<ResMut<MostRecentTick>>,
+    mut transform_query: Query<(&mut Transform, &TransformFromServer, &VelocityExtrapolate)>,
+) {
+    if let Some(mut tick) = most_recent_tick {
+        for (mut transform, transform_from_server, extrapolate) in &mut transform_query {
+            let predict_ticks = tick.predicted - extrapolate.base_tick;
+            let predict_f = (predict_ticks as f32) / 60.0;
 
+            transform.translation =
+                transform_from_server.0.translation + extrapolate.velocity * predict_f;
+            info!(
+                "predict: {:?} {:?} {:?}",
+                transform.translation, transform_from_server, extrapolate
+            );
+        }
+
+        tick.predicted += 1;
+    }
+}
 /// update camera tracking
 fn update_target_system(
     windows: Res<Windows>,
