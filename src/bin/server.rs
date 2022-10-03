@@ -13,8 +13,8 @@ use bevy_renet::{
 };
 use renet_test::{
     exit_on_esc_system, server_connection_config, setup_level, spawn_fireball, ClientChannel,
-    NetworkFrame, Player, PlayerCommand, PlayerInput, Projectile, ServerChannel, ServerMessages,
-    PLAYER_MOVE_SPEED, PROTOCOL_ID,
+    NetworkFrame, ObjectType, Player, PlayerCommand, PlayerInput, Projectile, ServerChannel,
+    ServerMessages, PLAYER_MOVE_SPEED, PROTOCOL_ID,
 };
 use renet_visualizer::RenetServerVisualizer;
 
@@ -57,7 +57,8 @@ fn main() {
         .insert_resource(ClientTicks::default())
         .insert_resource(new_renet_server())
         .insert_resource(RenetServerVisualizer::<200>::default())
-        .insert_resource(SendTickTimer(Timer::from_seconds(5.0 / 60.0, true)));
+        .insert_resource(SendTickTimer(Timer::from_seconds(4.0 / 60.0, true)))
+        .insert_resource(AddCubeTimer(Timer::from_seconds(1.0, true)));
 
     app.add_system(server_update_system)
         .add_system(server_network_sync)
@@ -65,7 +66,8 @@ fn main() {
         .add_system(update_projectiles_system)
         .add_system(update_visulizer_system)
         .add_system(despawn_projectile_system)
-        .add_system(exit_on_esc_system);
+        .add_system(exit_on_esc_system)
+        .add_system(add_cube_system);
 
     app.add_system_to_stage(CoreStage::PostUpdate, projectile_on_removal_system);
 
@@ -133,7 +135,7 @@ fn server_update_system(
                         transform,
                         ..Default::default()
                     })
-                    .insert(RigidBody::Dynamic)
+                    .insert(RigidBody::KinematicPositionBased)
                     .insert(LockedAxes::ROTATION_LOCKED | LockedAxes::TRANSLATION_LOCKED_Y)
                     .insert(Collider::capsule_y(0.5, 0.5))
                     .insert(PlayerInput::default())
@@ -198,6 +200,7 @@ fn server_update_system(
                             let message = ServerMessages::SpawnProjectile {
                                 entity: fireball_entity,
                                 translation,
+                                object_type: ObjectType::Projectile,
                             };
                             let message = bincode::serialize(&message).unwrap();
                             // info!("spawn projectile: {}", message.len());
@@ -245,14 +248,24 @@ fn update_visulizer_system(
 struct SendTickTimer(Timer);
 
 /// send out NetworkFrame messages to clients
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn server_network_sync(
     mut tick: ResMut<NetworkTick>,
     mut server: ResMut<RenetServer>,
     time: Res<Time>,
     mut timer: ResMut<SendTickTimer>,
-    players: Query<(Entity, &Transform, &PlayerVelocity), (Without<Projectile>, With<Player>)>,
-    projectiles: Query<(Entity, &Transform, &Velocity), With<Projectile>>,
+    players: Query<
+        (Entity, &Transform, &PlayerVelocity),
+        (Without<Projectile>, With<Player>, Without<CubeMarker>),
+    >,
+    projectiles: Query<
+        (Entity, &Transform, &Velocity),
+        (With<Projectile>, Without<Player>, Without<CubeMarker>),
+    >,
+    cubes: Query<
+        (Entity, &Transform, &Velocity),
+        (Without<Projectile>, Without<Player>, With<CubeMarker>),
+    >,
     player_query: Query<(&PlayerInputQueue, &Player)>,
 ) {
     let mut frame = NetworkFrame::default();
@@ -264,6 +277,12 @@ fn server_network_sync(
     }
 
     for (entity, transform, velocity) in projectiles.iter() {
+        frame.entities.entities.push(entity);
+        frame.entities.translations.push(transform.translation);
+        frame.entities.velocities.push(velocity.linvel);
+    }
+
+    for (entity, transform, velocity) in cubes.iter() {
         frame.entities.entities.push(entity);
         frame.entities.translations.push(transform.translation);
         frame.entities.velocities.push(velocity.linvel);
@@ -339,6 +358,42 @@ fn projectile_on_removal_system(
 
         let message = bincode::serialize(&message).unwrap();
         info!("message {:?}", message);
+        server.broadcast_message(ServerChannel::ServerMessages.id(), message);
+    }
+}
+
+struct AddCubeTimer(Timer);
+#[derive(Component)]
+struct CubeMarker;
+
+fn add_cube_system(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut timer: ResMut<AddCubeTimer>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut server: ResMut<RenetServer>,
+) {
+    timer.0.tick(time.delta());
+
+    if timer.0.just_finished() {
+        let bundle = ObjectType::Box.representation_bundle(&mut meshes, &mut materials);
+        let translation = bundle.transform.translation;
+        let cube_entity = commands
+            .spawn_bundle(bundle)
+            .insert(RigidBody::Dynamic)
+            .insert(Collider::cuboid(0.1, 0.1, 0.1))
+            .insert(CubeMarker)
+            .insert(Velocity::default())
+            .id();
+
+        let message = ServerMessages::SpawnProjectile {
+            entity: cube_entity,
+            translation,
+            object_type: ObjectType::Box,
+        };
+        let message = bincode::serialize(&message).unwrap();
+        // info!("spawn projectile: {}", message.len());
         server.broadcast_message(ServerChannel::ServerMessages.id(), message);
     }
 }

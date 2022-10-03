@@ -8,6 +8,9 @@ use bevy_renet::renet::{
 };
 use serde::{Deserialize, Serialize};
 
+pub mod camera;
+pub mod predict;
+
 pub const PRIVATE_KEY: &[u8; NETCODE_KEY_BYTES] = b"an example very very secret key."; // 32-bytes
 pub const PROTOCOL_ID: u64 = 7;
 
@@ -43,6 +46,30 @@ pub enum ServerChannel {
     NetworkFrame,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub enum ObjectType {
+    Projectile,
+    Box,
+}
+
+impl ObjectType {
+    pub fn representation_bundle(
+        &self,
+        meshes: &mut Assets<Mesh>,
+        materials: &mut Assets<StandardMaterial>,
+    ) -> PbrBundle {
+        match self {
+            ObjectType::Projectile => todo!(),
+            ObjectType::Box => PbrBundle {
+                mesh: meshes.add(Mesh::from(shape::Cube::new(0.2))),
+                material: materials.add(Color::rgb(0.8, 0.7, 0.6).into()),
+                transform: Transform::from_xyz(0.0, 3.0, 0.0),
+                ..default()
+            },
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Component)]
 pub enum ServerMessages {
     PlayerCreate {
@@ -56,6 +83,7 @@ pub enum ServerMessages {
     SpawnProjectile {
         entity: Entity,
         translation: Vec3,
+        object_type: ObjectType,
         // velocity: Vec3,
     },
     DespawnProjectile {
@@ -268,4 +296,8 @@ pub fn exit_on_esc_system(
     }
 }
 
-pub mod predict;
+#[derive(Component)]
+pub struct ControlledPlayer;
+
+#[derive(Component)]
+pub struct WorldSpacePointer;

@@ -12,14 +12,11 @@ use bevy_renet::{
 };
 use renet_test::{
     client_connection_config, exit_on_esc_system, predict::VelocityExtrapolate, setup_level,
-    ClientChannel, NetworkFrame, PlayerCommand, PlayerInput, Ray3d, ServerChannel, ServerMessages,
-    PLAYER_MOVE_SPEED, PROTOCOL_ID,
+    ClientChannel, NetworkFrame, ObjectType, PlayerCommand, PlayerInput, ServerChannel,
+    ServerMessages, PLAYER_MOVE_SPEED, PROTOCOL_ID,
 };
 use renet_visualizer::{RenetClientVisualizer, RenetVisualizerStyle};
-use smooth_bevy_cameras::{LookTransform, LookTransformBundle, LookTransformPlugin, Smoother};
-
-#[derive(Component)]
-struct ControlledPlayer;
+use smooth_bevy_cameras::LookTransformPlugin;
 
 #[derive(Default)]
 struct NetworkMapping(HashMap<Entity, Entity>);
@@ -50,9 +47,6 @@ struct PlayerInputQueue {
 #[derive(Component, Default, Debug)]
 struct TransformFromServer(Transform);
 
-#[derive(Component)]
-struct Target;
-
 fn new_renet_client() -> RenetClient {
     let server_addr = "127.0.0.1:5000".parse().unwrap();
     let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -68,9 +62,6 @@ fn new_renet_client() -> RenetClient {
         server_addr,
         user_data: None,
     };
-    // ran
-    // let client_id = rand::thread_rng().gen();
-    // info!("client id 2: {}", client_id);
 
     RenetClient::new(
         current_time,
@@ -101,8 +92,8 @@ fn main() {
     // app.insert_resource(PlayerInputQueue::default());
 
     app.add_system(player_input);
-    app.add_system(camera_follow);
-    app.add_system(update_target_system);
+    app.add_system(renet_test::camera::camera_follow);
+    app.add_system(renet_test::camera::update_target_system);
     app.add_system(client_send_input.with_run_criteria(run_if_client_connected));
     app.add_system(client_send_player_commands.with_run_criteria(run_if_client_connected));
     app.add_system(client_sync_players.with_run_criteria(run_if_client_connected));
@@ -126,8 +117,8 @@ fn main() {
     app.add_system(update_visulizer_system);
 
     app.add_startup_system(setup_level);
-    app.add_startup_system(setup_camera);
-    app.add_startup_system(setup_target);
+    app.add_startup_system(renet_test::camera::setup_camera);
+    app.add_startup_system(renet_test::camera::setup_target);
     app.add_system(panic_on_error_system);
 
     app.run();
@@ -162,10 +153,11 @@ fn player_input(
     keyboard_input: Res<Input<KeyCode>>,
     mut player_input: ResMut<PlayerInput>,
     mouse_button_input: Res<Input<MouseButton>>,
-    target_query: Query<&Transform, With<Target>>,
+    target_query: Query<&Transform, With<renet_test::WorldSpacePointer>>,
     mut player_commands: EventWriter<PlayerCommand>,
     most_recent_tick: Option<Res<MostRecentTick>>,
 ) {
+    debug!("player_input");
     player_input.serial += 1;
     player_input.left = keyboard_input.pressed(KeyCode::A) || keyboard_input.pressed(KeyCode::Left);
     player_input.right =
@@ -187,7 +179,7 @@ fn player_input(
 fn client_send_input(
     player_input: Res<PlayerInput>,
     mut client: ResMut<RenetClient>,
-    mut player_input_queue: Query<&mut PlayerInputQueue, With<ControlledPlayer>>,
+    mut player_input_queue: Query<&mut PlayerInputQueue, With<renet_test::ControlledPlayer>>,
 ) {
     if let Ok(mut player_input_queue) = player_input_queue.get_single_mut() {
         player_input_queue.queue.push_back(*player_input);
@@ -234,11 +226,11 @@ fn client_sync_players(
     mut transform_query: Query<&mut Transform>,
     mut controlled_player: Query<
         (&mut PlayerInputQueue, &mut TransformFromServer),
-        With<ControlledPlayer>,
+        With<renet_test::ControlledPlayer>,
     >,
     mut extrapolate: Query<
         (&mut TransformFromServer, &mut VelocityExtrapolate),
-        Without<ControlledPlayer>,
+        Without<renet_test::ControlledPlayer>,
     >,
 ) {
     let client_id = client.client_id();
@@ -261,7 +253,7 @@ fn client_sync_players(
                 if client_id == id {
                     info!("controlled player");
                     client_entity
-                        .insert(ControlledPlayer)
+                        .insert(renet_test::ControlledPlayer)
                         .insert(PlayerInputQueue::default());
                 } else {
                     client_entity.insert(VelocityExtrapolate::default());
@@ -289,6 +281,7 @@ fn client_sync_players(
             ServerMessages::SpawnProjectile {
                 entity,
                 translation,
+                object_type: ObjectType::Projectile,
             } => {
                 let mut projectile_entity = commands.spawn_bundle(PbrBundle {
                     mesh: meshes.add(Mesh::from(shape::Icosphere {
@@ -299,6 +292,21 @@ fn client_sync_players(
                     transform: Transform::from_translation(translation),
                     ..Default::default()
                 });
+                projectile_entity
+                    .insert(TransformFromServer::default())
+                    .insert(VelocityExtrapolate::default());
+                network_mapping.0.insert(entity, projectile_entity.id());
+            }
+            ServerMessages::SpawnProjectile {
+                entity,
+                translation,
+                object_type: ObjectType::Box,
+            } => {
+                info!("spawn box");
+                let mut bundle = ObjectType::Box.representation_bundle(&mut meshes, &mut materials);
+                bundle.transform = Transform::from_translation(translation);
+
+                let mut projectile_entity = commands.spawn_bundle(bundle);
                 projectile_entity
                     .insert(TransformFromServer::default())
                     .insert(VelocityExtrapolate::default());
@@ -381,10 +389,12 @@ fn client_sync_players(
 fn client_predict_input(
     mut transform_query: Query<
         (&mut Transform, &TransformFromServer, &mut PlayerInputQueue),
-        With<ControlledPlayer>,
+        With<renet_test::ControlledPlayer>,
     >,
     // most_recent_tick: Option<ResMut<MostRecentTick>>,
 ) {
+    debug!("client_predict_input");
+
     if let Ok((mut transform, transform_from_server, mut player_input_queue)) =
         transform_query.get_single_mut()
     {
@@ -444,65 +454,5 @@ fn predict_entities(
         }
 
         tick.predicted += 1;
-    }
-}
-/// update camera tracking
-fn update_target_system(
-    windows: Res<Windows>,
-    mut target_query: Query<&mut Transform, With<Target>>,
-    camera_query: Query<(&Camera, &GlobalTransform)>,
-) {
-    let (camera, camera_transform) = camera_query.single();
-    let mut target_transform = target_query.single_mut();
-    if let Some(ray) = Ray3d::from_screenspace(&windows, camera, camera_transform) {
-        if let Some(pos) = ray.intersect_y_plane(1.0) {
-            target_transform.translation = pos;
-        }
-    }
-}
-
-fn setup_camera(mut commands: Commands) {
-    commands
-        .spawn_bundle(LookTransformBundle {
-            transform: LookTransform {
-                eye: Vec3::new(0.0, 8., 2.5),
-                target: Vec3::new(0.0, 0.5, 0.0),
-            },
-            smoother: Smoother::new(0.9),
-        })
-        .insert_bundle(Camera3dBundle {
-            transform: Transform::from_xyz(0., 8.0, 2.5)
-                .looking_at(Vec3::new(0.0, 0.5, 0.0), Vec3::Y),
-            ..default()
-        });
-}
-
-fn setup_target(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    commands
-        .spawn_bundle(PbrBundle {
-            mesh: meshes.add(Mesh::from(shape::Icosphere {
-                radius: 0.1,
-                subdivisions: 5,
-            })),
-            material: materials.add(Color::rgb(1.0, 0.0, 0.0).into()),
-            transform: Transform::from_xyz(0.0, 0., 0.0),
-            ..Default::default()
-        })
-        .insert(Target);
-}
-
-fn camera_follow(
-    mut camera_query: Query<&mut LookTransform, (With<Camera>, Without<ControlledPlayer>)>,
-    player_query: Query<&Transform, With<ControlledPlayer>>,
-) {
-    let mut cam_transform = camera_query.single_mut();
-    if let Ok(player_transform) = player_query.get_single() {
-        cam_transform.eye.x = player_transform.translation.x;
-        cam_transform.eye.z = player_transform.translation.z + 2.5;
-        cam_transform.target = player_transform.translation;
     }
 }
