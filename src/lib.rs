@@ -96,6 +96,7 @@ pub struct NetworkedEntities {
     pub entities: Vec<Entity>,
     pub translations: Vec<Vec3>,
     pub velocities: Vec<Vec3>,
+    pub rotations: Vec<Quat>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]

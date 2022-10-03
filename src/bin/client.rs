@@ -350,8 +350,10 @@ fn client_sync_players(
 
             if let Some(entity) = network_mapping.0.get(&frame.entities.entities[i]) {
                 let translation = frame.entities.translations[i];
+                let rotation = frame.entities.rotations[i];
                 let transform = Transform {
                     translation,
+                    rotation,
                     ..Default::default()
                 };
 

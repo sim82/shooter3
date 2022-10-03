@@ -274,18 +274,21 @@ fn server_network_sync(
         frame.entities.entities.push(entity);
         frame.entities.translations.push(transform.translation);
         frame.entities.velocities.push(velocity.velocity);
+        frame.entities.rotations.push(default());
     }
 
     for (entity, transform, velocity) in projectiles.iter() {
         frame.entities.entities.push(entity);
         frame.entities.translations.push(transform.translation);
         frame.entities.velocities.push(velocity.linvel);
+        frame.entities.rotations.push(default());
     }
 
     for (entity, transform, velocity) in cubes.iter() {
         frame.entities.entities.push(entity);
         frame.entities.translations.push(transform.translation);
         frame.entities.velocities.push(velocity.linvel);
+        frame.entities.rotations.push(transform.rotation);
     }
 
     frame.tick = tick.0;
