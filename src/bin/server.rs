@@ -12,8 +12,8 @@ use bevy_renet::{
     RenetServerPlugin,
 };
 use renet_test::{
-    exit_on_esc_system, server_connection_config, setup_level, spawn_fireball, ClientChannel,
-    NetworkFrame, ObjectType, Player, PlayerCommand, PlayerInput, Projectile, ServerChannel,
+    exit_on_esc_system, frame::NetworkFrame, server_connection_config, setup_level, spawn_fireball,
+    ClientChannel, ObjectType, Player, PlayerCommand, PlayerInput, Projectile, ServerChannel,
     ServerMessages, PLAYER_MOVE_SPEED, PROTOCOL_ID,
 };
 use renet_visualizer::RenetServerVisualizer;
@@ -57,7 +57,7 @@ fn main() {
         .insert_resource(ClientTicks::default())
         .insert_resource(new_renet_server())
         .insert_resource(RenetServerVisualizer::<200>::default())
-        .insert_resource(SendTickTimer(Timer::from_seconds(4.0 / 60.0, true)))
+        .insert_resource(SendTickTimer(Timer::from_seconds(5.0 / 60.0, true)))
         .insert_resource(AddCubeTimer(Timer::from_seconds(1.0, true)));
 
     app.add_system(server_update_system)
@@ -274,21 +274,22 @@ fn server_network_sync(
         frame.entities.entities.push(entity);
         frame.entities.translations.push(transform.translation);
         frame.entities.velocities.push(velocity.velocity);
-        frame.entities.rotations.push(default());
+        // frame.entities.rotations.push(default());
     }
 
     for (entity, transform, velocity) in projectiles.iter() {
         frame.entities.entities.push(entity);
         frame.entities.translations.push(transform.translation);
         frame.entities.velocities.push(velocity.linvel);
-        frame.entities.rotations.push(default());
+        // frame.entities.rotations.push(default());
     }
 
     for (entity, transform, velocity) in cubes.iter() {
-        frame.entities.entities.push(entity);
-        frame.entities.translations.push(transform.translation);
-        frame.entities.velocities.push(velocity.linvel);
-        frame.entities.rotations.push(transform.rotation);
+        frame.with_rotation.entities.push(entity);
+        frame.with_rotation.translations.push(transform.translation);
+        frame.with_rotation.velocities.push(velocity.linvel);
+        frame.with_rotation.rotations.push(transform.rotation);
+        // info!("rot: {:?}", velocity.angvel);
     }
 
     frame.tick = tick.0;

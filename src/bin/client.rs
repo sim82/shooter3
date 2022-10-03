@@ -11,9 +11,9 @@ use bevy_renet::{
     run_if_client_connected, RenetClientPlugin,
 };
 use renet_test::{
-    client_connection_config, exit_on_esc_system, predict::VelocityExtrapolate, setup_level,
-    ClientChannel, NetworkFrame, ObjectType, PlayerCommand, PlayerInput, ServerChannel,
-    ServerMessages, PLAYER_MOVE_SPEED, PROTOCOL_ID,
+    client_connection_config, exit_on_esc_system, frame::NetworkFrame,
+    predict::VelocityExtrapolate, setup_level, ClientChannel, ObjectType, PlayerCommand,
+    PlayerInput, ServerChannel, ServerMessages, PLAYER_MOVE_SPEED, PROTOCOL_ID,
 };
 use renet_visualizer::{RenetClientVisualizer, RenetVisualizerStyle};
 use smooth_bevy_cameras::LookTransformPlugin;
@@ -350,7 +350,52 @@ fn client_sync_players(
 
             if let Some(entity) = network_mapping.0.get(&frame.entities.entities[i]) {
                 let translation = frame.entities.translations[i];
-                let rotation = frame.entities.rotations[i];
+                // let rotation = frame.entities.rotations[i];
+                let transform = Transform {
+                    translation,
+                    // rotation,
+                    ..Default::default()
+                };
+
+                if let Ok(old_transform) = transform_query.get(*entity) {
+                    debug!(
+                        "apply transform {} {:?} -> {:?} {:?}",
+                        frame.last_player_input,
+                        entity,
+                        transform.translation,
+                        old_transform.translation
+                    );
+                }
+
+                if let Ok((mut player_input_queue, mut transform_from_server)) =
+                    controlled_player.get_mut(*entity)
+                {
+                    *transform_from_server = TransformFromServer(transform);
+                    player_input_queue.last_server_serial = frame.last_player_input;
+                }
+                if let Ok(mut ent_transform) = transform_query.get_mut(*entity) {
+                    *ent_transform = transform;
+                }
+                if let Ok((mut transform_from_server, mut extrapolate)) =
+                    extrapolate.get_mut(*entity)
+                {
+                    *transform_from_server = TransformFromServer(transform);
+                    extrapolate.base_tick = frame.tick;
+                    extrapolate.velocity = frame.entities.velocities[i];
+                }
+            }
+        }
+        for i in 0..frame.with_rotation.entities.len() {
+            info!(
+                "entity {} {:?} -> {:?}",
+                i,
+                frame.with_rotation.entities[i],
+                network_mapping.0.get(&frame.with_rotation.entities[i])
+            );
+
+            if let Some(entity) = network_mapping.0.get(&frame.with_rotation.entities[i]) {
+                let translation = frame.with_rotation.translations[i];
+                let rotation = frame.with_rotation.rotations[i];
                 let transform = Transform {
                     translation,
                     rotation,
@@ -381,7 +426,7 @@ fn client_sync_players(
                 {
                     *transform_from_server = TransformFromServer(transform);
                     extrapolate.base_tick = frame.tick;
-                    extrapolate.velocity = frame.entities.velocities[i];
+                    extrapolate.velocity = frame.with_rotation.velocities[i];
                 }
             }
         }
