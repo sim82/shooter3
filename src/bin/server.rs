@@ -67,7 +67,8 @@ fn main() {
         .add_system(update_visulizer_system)
         .add_system(despawn_projectile_system)
         .add_system(exit_on_esc_system)
-        .add_system(add_cube_system);
+        // .add_system(add_cube_system)
+        ;
 
     app.add_system_to_stage(CoreStage::PostUpdate, projectile_on_removal_system);
 
@@ -135,14 +136,17 @@ fn server_update_system(
                         transform,
                         ..Default::default()
                     })
-                    .insert(RigidBody::KinematicPositionBased)
-                    .insert(LockedAxes::ROTATION_LOCKED | LockedAxes::TRANSLATION_LOCKED_Y)
+                    .insert(RigidBody::Dynamic)
+                    .insert(
+                        LockedAxes::ROTATION_LOCKED, /*| LockedAxes::TRANSLATION_LOCKED_Y*/
+                    )
                     .insert(Collider::capsule_y(0.5, 0.5))
                     .insert(PlayerInput::default())
                     // .insert(Velocity::default())
                     .insert(PlayerInputQueue::default())
                     .insert(PlayerVelocity::default())
                     .insert(Player { id: *id })
+                    .insert(ExternalImpulse::default())
                     .id();
 
                 lobby.players.insert(*id, player_entity);
@@ -308,17 +312,25 @@ fn server_network_sync(
 
 // apply PlayerInput to client entities
 fn move_players_system(
-    mut query: Query<(&mut Transform, &mut PlayerInputQueue, &mut PlayerVelocity)>,
+    mut query: Query<(
+        &mut Transform,
+        &mut PlayerInputQueue,
+        &mut PlayerVelocity,
+        &mut ExternalImpulse,
+    )>,
 ) {
-    for (mut transform, mut input_queue, mut player_velocity) in query.iter_mut() {
+    for (mut transform, mut input_queue, mut player_velocity, mut impulse) in query.iter_mut() {
         while let Some(input) = input_queue.queue.pop_front() {
             debug!("apply player input: {}", input.serial);
             let x = (input.right as i8 - input.left as i8) as f32;
             let y = (input.down as i8 - input.up as i8) as f32;
             let direction = Vec2::new(x, y).normalize_or_zero();
-            let offs = direction * PLAYER_MOVE_SPEED * (1.0 / 60.0);
-            transform.translation.x += offs.x;
-            transform.translation.z += offs.y;
+            let offs = direction * PLAYER_MOVE_SPEED; // * (1.0 / 60.0);
+                                                      // transform.translation.x += offs.x;
+                                                      // transform.translation.z += offs.y;
+            impulse.impulse.x = offs.x;
+            impulse.impulse.z = offs.y;
+
             player_velocity.velocity = (direction * PLAYER_MOVE_SPEED).extend(0.0).xzy();
             input_queue.last_applied_serial = input.serial;
             // velocity.linvel.x = direction.x * PLAYER_MOVE_SPEED;
