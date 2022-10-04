@@ -40,35 +40,15 @@ pub struct FpsControllerInput {
     pub movement: Vec3,
 }
 
-#[derive(Component)]
+#[derive(Component, Default)]
 pub struct FpsControllerInputQueue {
     queue: VecDeque<FpsControllerInput>,
     last_server_serial: u32,
+    last_pushed_serial: u32,
 }
 
 // #[derive(Component)]
 pub struct FpsControllerConfig {
-    pub move_mode: MoveMode,
-    pub gravity: f32,
-    pub walk_speed: f32,
-    pub run_speed: f32,
-    pub forward_speed: f32,
-    pub side_speed: f32,
-    pub air_speed_cap: f32,
-    pub air_acceleration: f32,
-    pub max_air_speed: f32,
-    pub accel: f32,
-    pub friction: f32,
-    pub friction_cutoff: f32,
-    pub jump_speed: f32,
-    pub fly_speed: f32,
-    pub fast_fly_speed: f32,
-    pub fly_friction: f32,
-    pub pitch: f32,
-    pub yaw: f32,
-    pub velocity: Vec3,
-    pub ground_tick: u8,
-    pub stop_speed: f32,
     pub sensitivity: f32,
     pub enable_input: bool,
     pub key_forward: KeyCode,
@@ -86,27 +66,6 @@ pub struct FpsControllerConfig {
 impl Default for FpsControllerConfig {
     fn default() -> Self {
         Self {
-            move_mode: MoveMode::Ground,
-            fly_speed: 10.0,
-            fast_fly_speed: 30.0,
-            gravity: 23.0,
-            walk_speed: 10.0,
-            run_speed: 30.0,
-            forward_speed: 30.0,
-            side_speed: 30.0,
-            air_speed_cap: 2.0,
-            air_acceleration: 20.0,
-            max_air_speed: 8.0,
-            accel: 10.0,
-            friction: 10.0,
-            friction_cutoff: 0.1,
-            fly_friction: 0.5,
-            pitch: 0.0,
-            yaw: 0.0,
-            velocity: Vec3::ZERO,
-            ground_tick: 0,
-            stop_speed: 1.0,
-            jump_speed: 8.5,
             enable_input: true,
             key_forward: KeyCode::W,
             key_back: KeyCode::S,
@@ -125,6 +84,7 @@ impl Default for FpsControllerConfig {
 
 #[derive(Component)]
 pub struct FpsController {
+    pub last_applied_serial: u32,
     pub move_mode: MoveMode,
     pub gravity: f32,
     pub walk_speed: f32,
@@ -146,23 +106,12 @@ pub struct FpsController {
     pub velocity: Vec3,
     pub ground_tick: u8,
     pub stop_speed: f32,
-    pub sensitivity: f32,
-    pub enable_input: bool,
-    pub key_forward: KeyCode,
-    pub key_back: KeyCode,
-    pub key_left: KeyCode,
-    pub key_right: KeyCode,
-    pub key_up: KeyCode,
-    pub key_down: KeyCode,
-    pub key_sprint: KeyCode,
-    pub key_jump: KeyCode,
-    pub key_fly: KeyCode,
-    pub key_crouch: KeyCode,
 }
 
 impl Default for FpsController {
     fn default() -> Self {
         Self {
+            last_applied_serial: 0,
             move_mode: MoveMode::Ground,
             fly_speed: 10.0,
             fast_fly_speed: 30.0,
@@ -184,18 +133,6 @@ impl Default for FpsController {
             ground_tick: 0,
             stop_speed: 1.0,
             jump_speed: 8.5,
-            enable_input: true,
-            key_forward: KeyCode::W,
-            key_back: KeyCode::S,
-            key_left: KeyCode::A,
-            key_right: KeyCode::D,
-            key_up: KeyCode::Q,
-            key_down: KeyCode::E,
-            key_sprint: KeyCode::LShift,
-            key_jump: KeyCode::Space,
-            key_fly: KeyCode::F,
-            key_crouch: KeyCode::LControl,
-            sensitivity: 0.001,
         }
     }
 }
@@ -211,7 +148,7 @@ const ANGLE_EPSILON: f32 = 0.001953125;
 
 pub fn fps_controller_input(
     key_input: Res<Input<KeyCode>>,
-    mut controller: ResMut<FpsControllerConfig>,
+    controller: Res<FpsControllerConfig>,
     mut windows: ResMut<Windows>,
     mut mouse_events: EventReader<MouseMotion>,
     mut query: Query<&mut FpsControllerInputQueue>,
@@ -231,7 +168,7 @@ pub fn fps_controller_input(
 
             input.pitch = (input.pitch - mouse_delta.y)
                 .clamp(-FRAC_PI_2 + ANGLE_EPSILON, FRAC_PI_2 - ANGLE_EPSILON);
-            input.yaw = input.yaw - mouse_delta.x;
+            input.yaw -= mouse_delta.x;
         }
 
         input.movement = Vec3::new(
@@ -243,6 +180,8 @@ pub fn fps_controller_input(
         input.jump = key_input.pressed(controller.key_jump);
         input.fly = key_input.just_pressed(controller.key_fly);
         input.crouch = key_input.pressed(controller.key_crouch);
+        input.serial = input_queue.last_pushed_serial;
+        input_queue.last_pushed_serial += 1;
         input_queue.queue.push_back(input);
     }
 }
@@ -270,7 +209,13 @@ pub fn fps_controller_move(
 
     for (entity, input_queue, mut controller, collider, transform, mut velocity) in query.iter_mut()
     {
+        // info!("queue: {}", input_queue.queue.len());
         for input in &input_queue.queue {
+            if input.serial <= controller.last_applied_serial {
+                info!("skip: {}", input.serial);
+                continue;
+            }
+
             if input.fly {
                 controller.move_mode = match controller.move_mode {
                     MoveMode::Noclip => MoveMode::Ground,
@@ -416,6 +361,7 @@ pub fn fps_controller_move(
                     }
                 }
             }
+            controller.last_applied_serial = input.serial;
         }
     }
 }

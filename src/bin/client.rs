@@ -6,12 +6,13 @@ use std::{
 
 use bevy::{diagnostic::FrameTimeDiagnosticsPlugin, prelude::*};
 use bevy_egui::{EguiContext, EguiPlugin};
+use bevy_rapier3d::prelude::*;
 use bevy_renet::{
     renet::{ClientAuthentication, RenetClient, RenetError},
     run_if_client_connected, RenetClientPlugin,
 };
 use renet_test::{
-    client_connection_config, exit_on_esc_system, frame::NetworkFrame,
+    client_connection_config, controller, exit_on_esc_system, frame::NetworkFrame,
     predict::VelocityExtrapolate, setup_level, ClientChannel, ObjectType, PlayerCommand,
     PlayerInput, ServerChannel, ServerMessages, PLAYER_MOVE_SPEED, PROTOCOL_ID,
 };
@@ -81,15 +82,22 @@ fn main() {
     app.add_plugin(FrameTimeDiagnosticsPlugin::default());
     // app.add_plugin(LogDiagnosticsPlugin::default());
     app.add_plugin(EguiPlugin);
-
+    app.add_plugin(controller::FpsControllerPlugin);
+    app.add_plugin(RapierPhysicsPlugin::<NoUserData>::default())
+        .add_plugin(RapierDebugRenderPlugin::default());
     app.add_event::<PlayerCommand>();
 
     app.insert_resource(ClientLobby::default());
     app.insert_resource(PlayerInput::default());
+    app.init_resource::<controller::FpsControllerConfig>();
 
     app.insert_resource(new_renet_client());
     app.insert_resource(NetworkMapping::default());
+    // app.insert_resource(controller::FpsControllerConfig::default());
     // app.insert_resource(PlayerInputQueue::default());
+
+    app.add_system(controller::fps_controller_input);
+    app.add_system(controller::fps_controller_move.after(controller::fps_controller_input));
 
     app.add_system(player_input);
     app.add_system(renet_test::camera::camera_follow);
@@ -119,6 +127,7 @@ fn main() {
     app.add_startup_system(setup_level);
     app.add_startup_system(renet_test::camera::setup_camera);
     app.add_startup_system(renet_test::camera::setup_target);
+    app.add_startup_system(setup_fps_controller);
     app.add_system(panic_on_error_system);
 
     app.run();
@@ -129,6 +138,30 @@ fn panic_on_error_system(mut renet_error: EventReader<RenetError>) {
     for e in renet_error.iter() {
         panic!("{}", e);
     }
+}
+
+fn setup_fps_controller(mut commands: Commands) {
+    commands
+        .spawn()
+        .insert(Collider::capsule(Vec3::Y * 0.5, Vec3::Y * 1.5, 0.5))
+        .insert(ActiveEvents::COLLISION_EVENTS)
+        .insert(Velocity::zero())
+        .insert(RigidBody::Dynamic)
+        .insert(Sleeping::disabled())
+        .insert(LockedAxes::ROTATION_LOCKED)
+        .insert(AdditionalMassProperties::Mass(1.0))
+        .insert(GravityScale(0.0))
+        .insert(Ccd { enabled: true }) // Prevent clipping when going fast
+        .insert(Transform::from_xyz(0.0, 3.0, 0.0))
+        // .insert(LogicalPlayer(0))
+        .insert(
+            controller::FpsControllerInputQueue::default(), //  {
+                                                            //     pitch: -TAU / 12.0,
+                                                            //     yaw: TAU * 5.0 / 8.0,
+                                                            //     ..default()
+                                                            // }
+        )
+        .insert(controller::FpsController { ..default() });
 }
 
 fn update_visulizer_system(
