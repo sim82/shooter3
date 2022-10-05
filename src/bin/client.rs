@@ -12,9 +12,13 @@ use bevy_renet::{
     run_if_client_connected, RenetClientPlugin,
 };
 use renet_test::{
-    client_connection_config, controller, exit_on_esc_system, frame::NetworkFrame,
-    predict::VelocityExtrapolate, setup_level, ClientChannel, ObjectType, PlayerCommand,
-    PlayerInput, ServerChannel, ServerMessages, PLAYER_MOVE_SPEED, PROTOCOL_ID,
+    client_connection_config,
+    controller::{self, FpsControllerPhysicsBundle},
+    exit_on_esc_system,
+    frame::NetworkFrame,
+    predict::VelocityExtrapolate,
+    setup_level, ClientChannel, ObjectType, PlayerCommand, PlayerInput, ServerChannel,
+    ServerMessages, PLAYER_MOVE_SPEED, PROTOCOL_ID,
 };
 use renet_visualizer::{RenetClientVisualizer, RenetVisualizerStyle};
 use smooth_bevy_cameras::LookTransformPlugin;
@@ -86,10 +90,12 @@ fn main() {
     app.add_plugin(RapierPhysicsPlugin::<NoUserData>::default())
         .add_plugin(RapierDebugRenderPlugin::default());
     app.add_event::<PlayerCommand>();
+    app.add_event::<controller::FpsControllerInput>();
 
     app.insert_resource(ClientLobby::default());
     app.insert_resource(PlayerInput::default());
     app.init_resource::<controller::FpsControllerConfig>();
+    app.init_resource::<controller::FpsControllerSerial>();
 
     app.insert_resource(new_renet_client());
     app.insert_resource(NetworkMapping::default());
@@ -105,13 +111,13 @@ fn main() {
     app.add_system(client_send_input.with_run_criteria(run_if_client_connected));
     app.add_system(client_send_player_commands.with_run_criteria(run_if_client_connected));
     app.add_system(client_sync_players.with_run_criteria(run_if_client_connected));
+    // app.add_system(
+    //     client_predict_input
+    //         .with_run_criteria(run_if_client_connected)
+    //         .after(player_input)
+    //         .after(client_sync_players),
+    // )
     app.add_system(
-        client_predict_input
-            .with_run_criteria(run_if_client_connected)
-            .after(player_input)
-            .after(client_sync_players),
-    )
-    .add_system(
         predict_entities
             .with_run_criteria(run_if_client_connected)
             .after(client_sync_players),
@@ -142,18 +148,18 @@ fn panic_on_error_system(mut renet_error: EventReader<RenetError>) {
 
 fn setup_fps_controller(mut commands: Commands) {
     commands
-        .spawn()
-        .insert(Collider::capsule(Vec3::Y * 0.5, Vec3::Y * 1.5, 0.5))
-        .insert(ActiveEvents::COLLISION_EVENTS)
-        .insert(Velocity::zero())
-        .insert(RigidBody::Dynamic)
-        .insert(Sleeping::disabled())
-        .insert(LockedAxes::ROTATION_LOCKED)
-        .insert(AdditionalMassProperties::Mass(1.0))
-        .insert(GravityScale(0.0))
-        .insert(Ccd { enabled: true }) // Prevent clipping when going fast
-        .insert(Transform::from_xyz(0.0, 3.0, 0.0))
-        // .insert(LogicalPlayer(0))
+        .spawn_bundle(FpsControllerPhysicsBundle::default())
+        // .insert(Collider::capsule(Vec3::Y * 0.5, Vec3::Y * 1.5, 0.5))
+        // .insert(ActiveEvents::COLLISION_EVENTS)
+        // .insert(Velocity::zero())
+        // .insert(RigidBody::Dynamic)
+        // .insert(Sleeping::disabled())
+        // .insert(LockedAxes::ROTATION_LOCKED)
+        // .insert(AdditionalMassProperties::Mass(1.0))
+        // .insert(GravityScale(0.0))
+        // .insert(Ccd { enabled: true }) // Prevent clipping when going fast
+        // .insert(Transform::from_xyz(0.0, 3.0, 0.0))
+        // // .insert(LogicalPlayer(0))
         .insert(
             controller::FpsControllerInputQueue::default(), //  {
                                                             //     pitch: -TAU / 12.0,
@@ -161,7 +167,8 @@ fn setup_fps_controller(mut commands: Commands) {
                                                             //     ..default()
                                                             // }
         )
-        .insert(controller::FpsController { ..default() });
+        .insert(controller::FpsController { ..default() })
+        .insert(Transform::from_xyz(0.0, 3.0, 0.0));
 }
 
 fn update_visulizer_system(
@@ -213,6 +220,7 @@ fn client_send_input(
     player_input: Res<PlayerInput>,
     mut client: ResMut<RenetClient>,
     mut player_input_queue: Query<&mut PlayerInputQueue, With<renet_test::ControlledPlayer>>,
+    mut event_reader: EventReader<controller::FpsControllerInput>,
 ) {
     if let Ok(mut player_input_queue) = player_input_queue.get_single_mut() {
         player_input_queue.queue.push_back(*player_input);
@@ -220,6 +228,10 @@ fn client_send_input(
     {
         let input_message = bincode::serialize(&*player_input).unwrap();
         client.send_message(ClientChannel::Input.id(), input_message);
+    }
+    for input in event_reader.iter() {
+        let input_message = bincode::serialize(input).unwrap();
+        client.send_message(ClientChannel::FcInput.id(), input_message);
     }
     // let input_message = bincode::serialize(&*player_input).unwrap();
     // client.send_message(ClientChannel::Input.id(), input_message);
@@ -355,6 +367,7 @@ fn client_sync_players(
 
     while let Some(message) = client.receive_message(ServerChannel::NetworkFrame.id()) {
         let frame: NetworkFrame = bincode::deserialize(&message).unwrap();
+        // info!("network frame");
         match most_recent_tick {
             None => {
                 commands.insert_resource(MostRecentTick {
@@ -403,6 +416,7 @@ fn client_sync_players(
                 if let Ok((mut player_input_queue, mut transform_from_server)) =
                     controlled_player.get_mut(*entity)
                 {
+                    info!("player transform update: {:?}", transform);
                     *transform_from_server = TransformFromServer(transform);
                     player_input_queue.last_server_serial = frame.last_player_input;
                 }

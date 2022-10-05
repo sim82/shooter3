@@ -12,9 +12,15 @@ use bevy_renet::{
     RenetServerPlugin,
 };
 use renet_test::{
-    exit_on_esc_system, frame::NetworkFrame, server_connection_config, setup_level, spawn_fireball,
-    ClientChannel, ObjectType, Player, PlayerCommand, PlayerInput, Projectile, ServerChannel,
-    ServerMessages, PLAYER_MOVE_SPEED, PROTOCOL_ID,
+    controller::{
+        self, FpsController, FpsControllerInput, FpsControllerInputQueue,
+        FpsControllerPhysicsBundle,
+    },
+    exit_on_esc_system,
+    frame::NetworkFrame,
+    server_connection_config, setup_level, spawn_fireball, ClientChannel, ObjectType, Player,
+    PlayerCommand, PlayerInput, Projectile, ServerChannel, ServerMessages, PLAYER_MOVE_SPEED,
+    PROTOCOL_ID,
 };
 use renet_visualizer::RenetServerVisualizer;
 
@@ -70,6 +76,8 @@ fn main() {
         // .add_system(add_cube_system)
         ;
 
+    app.add_system(controller::fps_controller_move);
+
     app.add_system_to_stage(CoreStage::PostUpdate, projectile_on_removal_system);
 
     app.add_startup_system(setup_level)
@@ -108,6 +116,7 @@ fn server_update_system(
     mut visualizer: ResMut<RenetServerVisualizer<200>>,
     mut client_ticks: ResMut<ClientTicks>,
     mut players: Query<(Entity, &Player, &Transform, &mut PlayerInputQueue)>,
+    mut players_fc: Query<&mut FpsControllerInputQueue>,
 ) {
     for event in server_events.iter() {
         match event {
@@ -136,17 +145,20 @@ fn server_update_system(
                         transform,
                         ..Default::default()
                     })
-                    .insert(RigidBody::Dynamic)
-                    .insert(
-                        LockedAxes::ROTATION_LOCKED, /*| LockedAxes::TRANSLATION_LOCKED_Y*/
-                    )
-                    .insert(Collider::capsule_y(0.5, 0.5))
-                    .insert(PlayerInput::default())
-                    // .insert(Velocity::default())
-                    .insert(PlayerInputQueue::default())
+                    // .insert(RigidBody::Dynamic)
+                    // .insert(
+                    //     LockedAxes::ROTATION_LOCKED, /*| LockedAxes::TRANSLATION_LOCKED_Y*/
+                    // )
+                    // .insert(Collider::capsule_y(0.5, 0.5))
+                    // .insert(PlayerInput::default())
+                    // // .insert(Velocity::default())
+                    // .insert(PlayerInputQueue::default())
                     .insert(PlayerVelocity::default())
                     .insert(Player { id: *id })
-                    .insert(ExternalImpulse::default())
+                    // .insert(ExternalImpulse::default())
+                    .insert_bundle(FpsControllerPhysicsBundle::default())
+                    .insert(FpsControllerInputQueue::default())
+                    .insert(FpsController::default())
                     .id();
 
                 lobby.players.insert(*id, player_entity);
@@ -224,6 +236,26 @@ fn server_update_system(
                 }
             }
         }
+        let mut inputs = Vec::new();
+        while let Some(message) = server.receive_message(client_id, ClientChannel::FcInput.id()) {
+            let input: FpsControllerInput = bincode::deserialize(&message).unwrap();
+            inputs.push(input);
+            // client_ticks.0.insert(client_id, input.most_recent_tick);
+            // if let Some(player_entity) = lobby.players.get(&client_id) {
+            //     // if let Ok((_, _, _, mut player_input_queue)) = players.get_mut(*player_entity) {
+            //     //     // commands.entity(*player_entity).insert(input);
+            //     //     player_input_queue.queue.push_back(input)
+            //     // }
+            //     info!("input: {:?}", input);
+            // }
+        }
+        inputs.sort_by_key(|i| i.serial);
+        for mut input_queue in &mut players_fc {
+            for input in &inputs {
+                // info!("input: {:?}", input);
+                input_queue.queue.push_back(input.clone());
+            }
+        }
     }
 }
 
@@ -270,7 +302,7 @@ fn server_network_sync(
         (Entity, &Transform, &Velocity),
         (Without<Projectile>, Without<Player>, With<CubeMarker>),
     >,
-    player_query: Query<(&PlayerInputQueue, &Player)>,
+    player_query: Query<(&FpsController, &Player)>,
 ) {
     let mut frame = NetworkFrame::default();
 
@@ -301,8 +333,8 @@ fn server_network_sync(
     // info!("tick: {}", tick.0);
     timer.0.tick(time.delta());
     if timer.0.just_finished() {
-        for (player_input_queue, player) in &player_query {
-            frame.last_player_input = player_input_queue.last_applied_serial;
+        for (fps_controller, player) in &player_query {
+            frame.last_player_input = fps_controller.last_applied_serial;
             let sync_message = bincode::serialize(&frame).unwrap();
             // server.broadcast_message(ServerChannel::NetworkFrame.id(), sync_message);
             server.send_message(player.id, ServerChannel::NetworkFrame.id(), sync_message);

@@ -4,6 +4,9 @@ use std::f32::consts::*;
 use bevy::input::mouse::MouseMotion;
 use bevy::{math::Vec3Swizzles, prelude::*};
 use bevy_rapier3d::prelude::*;
+use serde::{Deserialize, Serialize};
+
+use crate::PlayerInput;
 
 pub struct FpsControllerPlugin;
 
@@ -29,6 +32,9 @@ pub struct LogicalPlayer(pub u8);
 pub struct RenderPlayer(pub u8);
 
 #[derive(Default)]
+pub struct FpsControllerSerial(u32);
+
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct FpsControllerInput {
     pub serial: u32,
     pub fly: bool,
@@ -42,9 +48,7 @@ pub struct FpsControllerInput {
 
 #[derive(Component, Default)]
 pub struct FpsControllerInputQueue {
-    queue: VecDeque<FpsControllerInput>,
-    last_server_serial: u32,
-    last_pushed_serial: u32,
+    pub queue: VecDeque<FpsControllerInput>,
 }
 
 // #[derive(Component)]
@@ -149,41 +153,46 @@ const ANGLE_EPSILON: f32 = 0.001953125;
 pub fn fps_controller_input(
     key_input: Res<Input<KeyCode>>,
     controller: Res<FpsControllerConfig>,
+    mut serial: ResMut<FpsControllerSerial>,
     mut windows: ResMut<Windows>,
     mut mouse_events: EventReader<MouseMotion>,
     mut query: Query<&mut FpsControllerInputQueue>,
+    mut event_writer: EventWriter<FpsControllerInput>,
 ) {
-    for mut input_queue in query.iter_mut() {
-        if !controller.enable_input {
-            continue;
-        }
-        let mut input = FpsControllerInput::default();
-        let window = windows.get_primary_mut().unwrap();
-        if window.is_focused() {
-            let mut mouse_delta = Vec2::ZERO;
-            for mouse_event in mouse_events.iter() {
-                mouse_delta += mouse_event.delta;
-            }
-            mouse_delta *= controller.sensitivity;
-
-            input.pitch = (input.pitch - mouse_delta.y)
-                .clamp(-FRAC_PI_2 + ANGLE_EPSILON, FRAC_PI_2 - ANGLE_EPSILON);
-            input.yaw -= mouse_delta.x;
-        }
-
-        input.movement = Vec3::new(
-            get_axis(&key_input, controller.key_right, controller.key_left),
-            get_axis(&key_input, controller.key_up, controller.key_down),
-            get_axis(&key_input, controller.key_forward, controller.key_back),
-        );
-        input.sprint = key_input.pressed(controller.key_sprint);
-        input.jump = key_input.pressed(controller.key_jump);
-        input.fly = key_input.just_pressed(controller.key_fly);
-        input.crouch = key_input.pressed(controller.key_crouch);
-        input.serial = input_queue.last_pushed_serial;
-        input_queue.last_pushed_serial += 1;
-        input_queue.queue.push_back(input);
+    if !controller.enable_input {
+        return;
     }
+
+    let mut input = FpsControllerInput::default();
+    let window = windows.get_primary_mut().unwrap();
+    if window.is_focused() {
+        let mut mouse_delta = Vec2::ZERO;
+        for mouse_event in mouse_events.iter() {
+            mouse_delta += mouse_event.delta;
+        }
+        mouse_delta *= controller.sensitivity;
+
+        input.pitch = (input.pitch - mouse_delta.y)
+            .clamp(-FRAC_PI_2 + ANGLE_EPSILON, FRAC_PI_2 - ANGLE_EPSILON);
+        input.yaw -= mouse_delta.x;
+    }
+
+    input.movement = Vec3::new(
+        get_axis(&key_input, controller.key_right, controller.key_left),
+        get_axis(&key_input, controller.key_up, controller.key_down),
+        get_axis(&key_input, controller.key_forward, controller.key_back),
+    );
+    input.sprint = key_input.pressed(controller.key_sprint);
+    input.jump = key_input.pressed(controller.key_jump);
+    input.fly = key_input.just_pressed(controller.key_fly);
+    input.crouch = key_input.pressed(controller.key_crouch);
+    input.serial = serial.0;
+    serial.0 += 1;
+
+    for mut input_queue in query.iter_mut() {
+        input_queue.queue.push_back(input.clone());
+    }
+    event_writer.send(input);
 }
 
 // pub fn fps_controller_look(mut query: Query<(&mut FpsController, &FpsControllerInput)>) {
@@ -212,7 +221,7 @@ pub fn fps_controller_move(
         // info!("queue: {}", input_queue.queue.len());
         for input in &input_queue.queue {
             if input.serial <= controller.last_applied_serial {
-                info!("skip: {}", input.serial);
+                // info!("skip: {}", input.serial);
                 continue;
             }
 
@@ -361,6 +370,7 @@ pub fn fps_controller_move(
                     }
                 }
             }
+            debug!("applied: {} {:?}", input.serial, transform.translation);
             controller.last_applied_serial = input.serial;
         }
     }
@@ -430,6 +440,36 @@ pub fn fps_controller_render(
                     logical_transform.translation + Vec3::Y * camera_height;
                 render_transform.rotation = look_quat(controller.pitch, controller.yaw);
             }
+        }
+    }
+}
+
+#[derive(Bundle)]
+pub struct FpsControllerPhysicsBundle {
+    collider: Collider,
+    active_evnets: ActiveEvents,
+    velocity: Velocity,
+    rigid_body: RigidBody,
+    sleeping: Sleeping,
+    locked_axes: LockedAxes,
+    additional_mass_properties: AdditionalMassProperties,
+    gravity_scale: GravityScale,
+    ccd: Ccd,
+    // transform: Transform,
+}
+impl Default for FpsControllerPhysicsBundle {
+    fn default() -> Self {
+        Self {
+            collider: Collider::capsule(Vec3::Y * 0.5, Vec3::Y * 1.5, 0.5),
+            active_evnets: ActiveEvents::COLLISION_EVENTS,
+            velocity: Velocity::zero(),
+            rigid_body: RigidBody::Dynamic,
+            sleeping: Sleeping::disabled(),
+            locked_axes: LockedAxes::ROTATION_LOCKED,
+            additional_mass_properties: AdditionalMassProperties::Mass(1.0),
+            gravity_scale: GravityScale(0.0),
+            ccd: Ccd { enabled: true }, // Prevent clipping when going fas,
+                                        // transform: Transform::from_xyz(0.0, 3.0, 0.0),
         }
     }
 }

@@ -9,8 +9,8 @@ use bevy_renet::renet::{
 use serde::{Deserialize, Serialize};
 
 pub mod camera;
-pub mod predict;
 pub mod controller;
+pub mod predict;
 
 pub const PRIVATE_KEY: &[u8; NETCODE_KEY_BYTES] = b"an example very very secret key."; // 32-bytes
 pub const PROTOCOL_ID: u64 = 7;
@@ -39,6 +39,7 @@ pub enum PlayerCommand {
 
 pub enum ClientChannel {
     Input,
+    FcInput,
     Command,
 }
 
@@ -98,6 +99,7 @@ impl ClientChannel {
         match self {
             Self::Input => 0,
             Self::Command => 1,
+            Self::FcInput => 2,
         }
     }
 
@@ -112,6 +114,11 @@ impl ClientChannel {
             ReliableChannelConfig {
                 channel_id: Self::Command.id(),
                 message_resend_time: Duration::ZERO,
+                ..Default::default()
+            }
+            .into(),
+            UnreliableChannelConfig {
+                channel_id: Self::FcInput.id(),
                 ..Default::default()
             }
             .into(),
