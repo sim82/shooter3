@@ -480,7 +480,7 @@ fn client_sync_players(
     }
 }
 
-fn client_predict_input(
+fn _client_predict_input(
     mut transform_query: Query<
         (&mut Transform, &TransformFromServer, &mut PlayerInputQueue),
         With<renet_test::ControlledPlayer>,

@@ -351,7 +351,7 @@ fn move_players_system(
         &mut ExternalImpulse,
     )>,
 ) {
-    for (mut transform, mut input_queue, mut player_velocity, mut impulse) in query.iter_mut() {
+    for (mut _transform, mut input_queue, mut player_velocity, mut impulse) in query.iter_mut() {
         while let Some(input) = input_queue.queue.pop_front() {
             debug!("apply player input: {}", input.serial);
             let x = (input.right as i8 - input.left as i8) as f32;
@@ -414,7 +414,7 @@ struct AddCubeTimer(Timer);
 #[derive(Component)]
 struct CubeMarker;
 
-fn add_cube_system(
+fn _add_cube_system(
     mut commands: Commands,
     time: Res<Time>,
     mut timer: ResMut<AddCubeTimer>,

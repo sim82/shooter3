@@ -1,3 +1,5 @@
+// adapted from https://github.com/qhdwight/bevy_fps_controller
+
 use std::collections::VecDeque;
 use std::f32::consts::*;
 
@@ -5,8 +7,6 @@ use bevy::input::mouse::MouseMotion;
 use bevy::{math::Vec3Swizzles, prelude::*};
 use bevy_rapier3d::prelude::*;
 use serde::{Deserialize, Serialize};
-
-use crate::PlayerInput;
 
 pub struct FpsControllerPlugin;
 
