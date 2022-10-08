@@ -13,7 +13,7 @@ use bevy_renet::{
 };
 use renet_test::{
     client_connection_config,
-    controller::{self, FpsControllerPhysicsBundle},
+    controller::{self, FpsControllerInputQueue, FpsControllerPhysicsBundle},
     exit_on_esc_system,
     frame::NetworkFrame,
     predict::VelocityExtrapolate,
@@ -79,6 +79,7 @@ fn new_renet_client() -> RenetClient {
 }
 
 fn main() {
+    // tracing_subscriber::fmt().compact().init();
     let mut app = App::new();
     app.add_plugins(DefaultPlugins);
     app.add_plugin(RenetClientPlugin);
@@ -86,7 +87,7 @@ fn main() {
     app.add_plugin(FrameTimeDiagnosticsPlugin::default());
     // app.add_plugin(LogDiagnosticsPlugin::default());
     app.add_plugin(EguiPlugin);
-    app.add_plugin(controller::FpsControllerPlugin);
+    // app.add_plugin(controller::FpsControllerPlugin);
     app.add_plugin(RapierPhysicsPlugin::<NoUserData>::default())
         .add_plugin(RapierDebugRenderPlugin::default());
     app.add_event::<PlayerCommand>();
@@ -147,28 +148,20 @@ fn panic_on_error_system(mut renet_error: EventReader<RenetError>) {
 }
 
 fn setup_fps_controller(mut commands: Commands) {
-    commands
-        .spawn_bundle(FpsControllerPhysicsBundle::default())
-        // .insert(Collider::capsule(Vec3::Y * 0.5, Vec3::Y * 1.5, 0.5))
-        // .insert(ActiveEvents::COLLISION_EVENTS)
-        // .insert(Velocity::zero())
-        // .insert(RigidBody::Dynamic)
-        // .insert(Sleeping::disabled())
-        // .insert(LockedAxes::ROTATION_LOCKED)
-        // .insert(AdditionalMassProperties::Mass(1.0))
-        // .insert(GravityScale(0.0))
-        // .insert(Ccd { enabled: true }) // Prevent clipping when going fast
-        // .insert(Transform::from_xyz(0.0, 3.0, 0.0))
-        // // .insert(LogicalPlayer(0))
-        .insert(
-            controller::FpsControllerInputQueue::default(), //  {
-                                                            //     pitch: -TAU / 12.0,
-                                                            //     yaw: TAU * 5.0 / 8.0,
-                                                            //     ..default()
-                                                            // }
-        )
-        .insert(controller::FpsController { ..default() })
-        .insert(Transform::from_xyz(0.0, 3.0, 0.0));
+    // commands
+    //     .spawn_bundle(FpsControllerPhysicsBundle::default())
+    //     .insert(
+    //         controller::FpsControllerInputQueue::default(), //  {
+    //                                                         //     pitch: -TAU / 12.0,
+    //                                                         //     yaw: TAU * 5.0 / 8.0,
+    //                                                         //     ..default()
+    //                                                         // }
+    //     )
+    //     .insert(controller::FpsController {
+    //         log_name: Some("client"),
+    //         ..default()
+    //     })
+    //     .insert(Transform::from_xyz(0.0, 3.0, 0.0));
 }
 
 fn update_visulizer_system(
@@ -270,7 +263,7 @@ fn client_sync_players(
     mut most_recent_tick: Option<ResMut<MostRecentTick>>,
     mut transform_query: Query<&mut Transform>,
     mut controlled_player: Query<
-        (&mut PlayerInputQueue, &mut TransformFromServer),
+        (&mut controller::FpsController, &mut TransformFromServer),
         With<renet_test::ControlledPlayer>,
     >,
     mut extrapolate: Query<
@@ -299,7 +292,21 @@ fn client_sync_players(
                     info!("controlled player");
                     client_entity
                         .insert(renet_test::ControlledPlayer)
-                        .insert(PlayerInputQueue::default());
+                        // .insert(PlayerInputQueue::default());
+                        .insert_bundle(FpsControllerPhysicsBundle::default())
+                        .insert(
+                            controller::FpsControllerInputQueue::default(), //  {
+                                                                            //     pitch: -TAU / 12.0,
+                                                                            //     yaw: TAU * 5.0 / 8.0,
+                                                                            //     ..default()
+                                                                            // }
+                        )
+                        .insert(controller::FpsController {
+                            log_name: Some("client"),
+                            ..default()
+                        })
+                        // .insert(Transform::from_xyz(0.0, 3.0, 0.0))
+                        ;
                 } else {
                     client_entity.insert(VelocityExtrapolate::default());
                 }
@@ -387,7 +394,7 @@ fn client_sync_players(
         }
 
         for i in 0..frame.entities.entities.len() {
-            info!(
+            debug!(
                 "entity {} {:?} -> {:?}",
                 i,
                 frame.entities.entities[i],
@@ -404,7 +411,7 @@ fn client_sync_players(
                 };
 
                 if let Ok(old_transform) = transform_query.get(*entity) {
-                    debug!(
+                    info!(
                         "apply transform {} {:?} -> {:?} {:?}",
                         frame.last_player_input,
                         entity,
@@ -413,12 +420,13 @@ fn client_sync_players(
                     );
                 }
 
-                if let Ok((mut player_input_queue, mut transform_from_server)) =
+                if let Ok((mut fps_controller, mut transform_from_server)) =
                     controlled_player.get_mut(*entity)
                 {
                     info!("player transform update: {:?}", transform);
                     *transform_from_server = TransformFromServer(transform);
-                    player_input_queue.last_server_serial = frame.last_player_input;
+                    // *player_transform = transform;
+                    fps_controller.last_applied_serial = frame.last_player_input;
                 }
                 if let Ok(mut ent_transform) = transform_query.get_mut(*entity) {
                     *ent_transform = transform;
@@ -433,7 +441,7 @@ fn client_sync_players(
             }
         }
         for i in 0..frame.with_rotation.entities.len() {
-            info!(
+            debug!(
                 "entity {} {:?} -> {:?}",
                 i,
                 frame.with_rotation.entities[i],
@@ -459,12 +467,12 @@ fn client_sync_players(
                     );
                 }
 
-                if let Ok((mut player_input_queue, mut transform_from_server)) =
-                    controlled_player.get_mut(*entity)
-                {
-                    *transform_from_server = TransformFromServer(transform);
-                    player_input_queue.last_server_serial = frame.last_player_input;
-                }
+                // if let Ok((mut player_input_queue, mut transform_from_server)) =
+                //     controlled_player.get_mut(*entity)
+                // {
+                //     *transform_from_server = TransformFromServer(transform);
+                //     player_input_queue.last_server_serial = frame.last_player_input;
+                // }
                 if let Ok(mut ent_transform) = transform_query.get_mut(*entity) {
                     *ent_transform = transform;
                 }

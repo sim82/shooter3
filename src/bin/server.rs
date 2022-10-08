@@ -158,7 +158,11 @@ fn server_update_system(
                     // .insert(ExternalImpulse::default())
                     .insert_bundle(FpsControllerPhysicsBundle::default())
                     .insert(FpsControllerInputQueue::default())
-                    .insert(FpsController::default())
+                    .insert(FpsController {
+                        log_name: Some("server"),
+                        apply_single: true,
+                        ..default()
+                    })
                     .id();
 
                 lobby.players.insert(*id, player_entity);
@@ -307,6 +311,7 @@ fn server_network_sync(
     let mut frame = NetworkFrame::default();
 
     for (entity, transform, velocity) in players.iter() {
+        // info!("sync player");
         frame.entities.entities.push(entity);
         frame.entities.translations.push(transform.translation);
         frame.entities.velocities.push(velocity.velocity);

@@ -2,6 +2,7 @@
 
 use std::collections::VecDeque;
 use std::f32::consts::*;
+use std::time::Duration;
 
 use bevy::input::mouse::MouseMotion;
 use bevy::{math::Vec3Swizzles, prelude::*};
@@ -110,6 +111,8 @@ pub struct FpsController {
     pub velocity: Vec3,
     pub ground_tick: u8,
     pub stop_speed: f32,
+    pub log_name: Option<&'static str>,
+    pub apply_single: bool,
 }
 
 impl Default for FpsController {
@@ -137,9 +140,33 @@ impl Default for FpsController {
             ground_tick: 0,
             stop_speed: 1.0,
             jump_speed: 8.5,
+            log_name: None,
+            apply_single: false,
         }
     }
 }
+
+struct FrameTime(Duration);
+
+impl FrameTime {
+    pub fn new(time: Duration) -> FrameTime {
+        FrameTime(time)
+    }
+}
+
+impl std::fmt::Display for FrameTime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let micros_per_frame = 1000000 / 60;
+        let a = self.0.as_micros() / micros_per_frame;
+        let b = (self.0.as_micros() % micros_per_frame) * 1000 / micros_per_frame;
+
+        write!(f, "{}:{:03}", a, b)
+    }
+}
+
+// fn format_frame_time(time: Duration) -> String {
+//     format!("")
+// }
 
 // ██╗      ██████╗  ██████╗ ██╗ ██████╗
 // ██║     ██╔═══██╗██╔════╝ ██║██╔════╝
@@ -192,6 +219,7 @@ pub fn fps_controller_input(
     for mut input_queue in query.iter_mut() {
         input_queue.queue.push_back(input.clone());
     }
+    // info!("send: {}", input.serial);
     event_writer.send(input);
 }
 
@@ -218,11 +246,17 @@ pub fn fps_controller_move(
 
     for (entity, input_queue, mut controller, collider, transform, mut velocity) in query.iter_mut()
     {
+        let mut one_applied = false;
         // info!("queue: {}", input_queue.queue.len());
         for input in &input_queue.queue {
             if input.serial <= controller.last_applied_serial {
                 // info!("skip: {}", input.serial);
                 continue;
+            }
+
+            if one_applied && controller.apply_single {
+                debug!("skip");
+                break;
             }
 
             if input.fly {
@@ -370,8 +404,18 @@ pub fn fps_controller_move(
                     }
                 }
             }
-            debug!("applied: {} {:?}", input.serial, transform.translation);
+
+            if let Some(log_name) = controller.log_name {
+                debug!(
+                    "applied: {}: {}: {} {:?}",
+                    FrameTime::new(time.time_since_startup()),
+                    log_name,
+                    input.serial,
+                    transform.translation
+                );
+            }
             controller.last_applied_serial = input.serial;
+            one_applied = true;
         }
     }
 }
@@ -460,7 +504,8 @@ pub struct FpsControllerPhysicsBundle {
 impl Default for FpsControllerPhysicsBundle {
     fn default() -> Self {
         Self {
-            collider: Collider::capsule(Vec3::Y * 0.5, Vec3::Y * 1.5, 0.5),
+            // collider: Collider::capsule(Vec3::Y * 0.5, Vec3::Y * 1.5, 0.5),
+            collider: Collider::capsule_y(0.5, 0.5),
             active_evnets: ActiveEvents::COLLISION_EVENTS,
             velocity: Velocity::zero(),
             rigid_body: RigidBody::Dynamic,
