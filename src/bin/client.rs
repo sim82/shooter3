@@ -43,12 +43,6 @@ struct MostRecentTick {
     predicted: u32,
 }
 
-#[derive(Component, Default)]
-struct PlayerInputQueue {
-    queue: VecDeque<PlayerInput>,
-    last_server_serial: u32,
-}
-
 #[derive(Component, Default, Debug)]
 struct TransformFromServer(Transform);
 
@@ -212,12 +206,8 @@ fn player_input(
 fn client_send_input(
     player_input: Res<PlayerInput>,
     mut client: ResMut<RenetClient>,
-    mut player_input_queue: Query<&mut PlayerInputQueue, With<renet_test::ControlledPlayer>>,
     mut event_reader: EventReader<controller::FpsControllerInput>,
 ) {
-    if let Ok(mut player_input_queue) = player_input_queue.get_single_mut() {
-        player_input_queue.queue.push_back(*player_input);
-    }
     {
         let input_message = bincode::serialize(&*player_input).unwrap();
         client.send_message(ClientChannel::Input.id(), input_message);
@@ -226,8 +216,6 @@ fn client_send_input(
         let input_message = bincode::serialize(input).unwrap();
         client.send_message(ClientChannel::FcInput.id(), input_message);
     }
-    // let input_message = bincode::serialize(&*player_input).unwrap();
-    // client.send_message(ClientChannel::Input.id(), input_message);
 }
 
 /// serialize and send PlayerCommand to server on ClientChannel::Command
@@ -485,59 +473,6 @@ fn client_sync_players(
                 }
             }
         }
-    }
-}
-
-fn _client_predict_input(
-    mut transform_query: Query<
-        (&mut Transform, &TransformFromServer, &mut PlayerInputQueue),
-        With<renet_test::ControlledPlayer>,
-    >,
-    // most_recent_tick: Option<ResMut<MostRecentTick>>,
-) {
-    debug!("client_predict_input");
-
-    if let Ok((mut transform, transform_from_server, mut player_input_queue)) =
-        transform_query.get_single_mut()
-    {
-        let mut pop_min = u32::MAX;
-        let mut pop_max = u32::MIN;
-        while let Some(input) = player_input_queue.queue.front() {
-            let do_pop = input.serial <= player_input_queue.last_server_serial;
-            if do_pop {
-                if do_pop {
-                    pop_min = pop_min.min(input.serial);
-                    pop_max = pop_max.max(input.serial);
-                }
-                player_input_queue.queue.pop_front();
-            } else {
-                break;
-            }
-        }
-        if pop_min != u32::MAX {
-            debug!("pop {}-{}", pop_min, pop_max);
-        }
-        *transform = transform_from_server.0;
-
-        let mut apply_min = u32::MAX;
-        let mut apply_max = u32::MIN;
-        for input in &player_input_queue.queue {
-            let x = (input.right as i8 - input.left as i8) as f32;
-            let y = (input.down as i8 - input.up as i8) as f32;
-            let direction = Vec2::new(x, y).normalize_or_zero();
-
-            let offs = direction * PLAYER_MOVE_SPEED * (1.0 / 60.0);
-            transform.translation.x += offs.x;
-            transform.translation.z += offs.y;
-            apply_min = apply_min.min(input.serial);
-            apply_max = apply_max.max(input.serial);
-        }
-        debug!(
-            "apply {}-{}: {:?}",
-            apply_min, apply_max, transform.translation
-        );
-    } else {
-        warn!("no controlled player");
     }
 }
 
