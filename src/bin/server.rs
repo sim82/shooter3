@@ -136,7 +136,7 @@ fn server_update_system(
                     .insert_bundle(FpsControllerPhysicsBundle::default())
                     .insert(FpsControllerInputQueue::default())
                     .insert(FpsController {
-                        // log_name: Some("server"),
+                        log_name: Some("server"),
                         apply_single: true,
                         ..default()
                     })

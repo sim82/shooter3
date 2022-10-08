@@ -235,7 +235,7 @@ pub fn fps_controller_move(
     physics_context: Res<RapierContext>,
     mut query: Query<(
         Entity,
-        &FpsControllerInputQueue,
+        &mut FpsControllerInputQueue,
         &mut FpsController,
         &Collider,
         &mut Transform,
@@ -244,21 +244,13 @@ pub fn fps_controller_move(
 ) {
     let dt = time.delta_seconds();
 
-    for (entity, input_queue, mut controller, collider, transform, mut velocity) in query.iter_mut()
+    for (entity, mut input_queue, mut controller, collider, transform, mut velocity) in
+        query.iter_mut()
     {
         let mut one_applied = false;
         // info!("queue: {}", input_queue.queue.len());
-        for input in &input_queue.queue {
-            if input.serial <= controller.last_applied_serial {
-                // info!("skip: {}", input.serial);
-                continue;
-            }
 
-            if one_applied && controller.apply_single {
-                debug!("skip");
-                break;
-            }
-
+        while let Some(input) = input_queue.queue.pop_front() {
             if input.fly {
                 controller.move_mode = match controller.move_mode {
                     MoveMode::Noclip => MoveMode::Ground,
@@ -415,7 +407,9 @@ pub fn fps_controller_move(
                 );
             }
             controller.last_applied_serial = input.serial;
-            one_applied = true;
+            if controller.apply_single {
+                break;
+            }
         }
     }
 }

@@ -13,7 +13,7 @@ use bevy_renet::{
 };
 use renet_test::{
     client_connection_config,
-    controller::{self, FpsControllerInputQueue, FpsControllerPhysicsBundle},
+    controller::{self, FpsController, FpsControllerInputQueue, FpsControllerPhysicsBundle},
     exit_on_esc_system,
     frame::NetworkFrame,
     predict::VelocityExtrapolate,
@@ -204,7 +204,7 @@ fn client_sync_players(
     mut lobby: ResMut<ClientLobby>,
     mut network_mapping: ResMut<NetworkMapping>,
     mut most_recent_tick: Option<ResMut<MostRecentTick>>,
-    mut transform_query: Query<&mut Transform>,
+    mut transform_query: Query<&mut Transform, Without<renet_test::ControlledPlayer>>,
     mut controlled_player: Query<
         (
             &mut controller::FpsController,
@@ -357,16 +357,6 @@ fn client_sync_players(
                     ..Default::default()
                 };
 
-                if let Ok(old_transform) = transform_query.get(*entity) {
-                    info!(
-                        "apply transform {} {:?} -> {:?} {:?}",
-                        frame.last_player_input,
-                        entity,
-                        transform.translation,
-                        old_transform.translation
-                    );
-                }
-
                 if let Ok((mut fps_controller, mut transform_from_server, mut velocity)) =
                     controlled_player.get_mut(*entity)
                 {
@@ -378,6 +368,13 @@ fn client_sync_players(
                     info!("player transform update: {:?} {:?}", transform, velocity);
                 }
                 if let Ok(mut ent_transform) = transform_query.get_mut(*entity) {
+                    info!(
+                        "apply transform {} {:?} -> {:?} {:?}",
+                        frame.last_player_input,
+                        entity,
+                        transform.translation,
+                        ent_transform.translation
+                    );
                     *ent_transform = transform;
                 }
                 if let Ok((mut transform_from_server, mut extrapolate)) =
