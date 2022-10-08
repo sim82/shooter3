@@ -19,8 +19,7 @@ use renet_test::{
     exit_on_esc_system,
     frame::NetworkFrame,
     server_connection_config, setup_level, spawn_fireball, ClientChannel, ObjectType, Player,
-    PlayerCommand, PlayerInput, Projectile, ServerChannel, ServerMessages, PLAYER_MOVE_SPEED,
-    PROTOCOL_ID,
+    PlayerCommand, Projectile, ServerChannel, ServerMessages, PLAYER_MOVE_SPEED, PROTOCOL_ID,
 };
 use renet_visualizer::RenetServerVisualizer;
 
@@ -97,7 +96,7 @@ struct PlayerVelocity {
 ///
 /// receive ClientChannel::Command
 /// - PlayerCommand
-/// - PlayerInput: put nnto player entity as component
+/// - FpsControllerInput: put into fps controller input queue
 #[allow(clippy::too_many_arguments)]
 fn server_update_system(
     mut server_events: EventReader<ServerEvent>,
@@ -108,7 +107,7 @@ fn server_update_system(
     mut server: ResMut<RenetServer>,
     mut visualizer: ResMut<RenetServerVisualizer<200>>,
     mut client_ticks: ResMut<ClientTicks>,
-    mut players: Query<(Entity, &Player, &Transform)>,
+    players: Query<(Entity, &Player, &Transform)>,
     mut players_fc: Query<&mut FpsControllerInputQueue>,
 ) {
     for event in server_events.iter() {
@@ -138,14 +137,6 @@ fn server_update_system(
                         transform,
                         ..Default::default()
                     })
-                    // .insert(RigidBody::Dynamic)
-                    // .insert(
-                    //     LockedAxes::ROTATION_LOCKED, /*| LockedAxes::TRANSLATION_LOCKED_Y*/
-                    // )
-                    // .insert(Collider::capsule_y(0.5, 0.5))
-                    // .insert(PlayerInput::default())
-                    // // .insert(Velocity::default())
-                    // .insert(PlayerInputQueue::default())
                     .insert(PlayerVelocity::default())
                     .insert(Player { id: *id })
                     // .insert(ExternalImpulse::default())

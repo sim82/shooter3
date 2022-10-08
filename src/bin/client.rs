@@ -17,8 +17,8 @@ use renet_test::{
     exit_on_esc_system,
     frame::NetworkFrame,
     predict::VelocityExtrapolate,
-    setup_level, ClientChannel, ObjectType, PlayerCommand, PlayerInput, ServerChannel,
-    ServerMessages, PLAYER_MOVE_SPEED, PROTOCOL_ID,
+    setup_level, ClientChannel, ObjectType, PlayerCommand, ServerChannel, ServerMessages,
+    PLAYER_MOVE_SPEED, PROTOCOL_ID,
 };
 use renet_visualizer::{RenetClientVisualizer, RenetVisualizerStyle};
 use smooth_bevy_cameras::LookTransformPlugin;
@@ -88,14 +88,11 @@ fn main() {
     app.add_event::<controller::FpsControllerInput>();
 
     app.insert_resource(ClientLobby::default());
-    app.insert_resource(PlayerInput::default());
     app.init_resource::<controller::FpsControllerConfig>();
     app.init_resource::<controller::FpsControllerSerial>();
 
     app.insert_resource(new_renet_client());
     app.insert_resource(NetworkMapping::default());
-    // app.insert_resource(controller::FpsControllerConfig::default());
-    // app.insert_resource(PlayerInputQueue::default());
 
     app.add_system(controller::fps_controller_input);
     app.add_system(controller::fps_controller_move.after(controller::fps_controller_input));
@@ -106,12 +103,6 @@ fn main() {
     app.add_system(client_send_input.with_run_criteria(run_if_client_connected));
     app.add_system(client_send_player_commands.with_run_criteria(run_if_client_connected));
     app.add_system(client_sync_players.with_run_criteria(run_if_client_connected));
-    // app.add_system(
-    //     client_predict_input
-    //         .with_run_criteria(run_if_client_connected)
-    //         .after(player_input)
-    //         .after(client_sync_players),
-    // )
     app.add_system(
         predict_entities
             .with_run_criteria(run_if_client_connected)
@@ -128,7 +119,6 @@ fn main() {
     app.add_startup_system(setup_level);
     app.add_startup_system(renet_test::camera::setup_camera);
     app.add_startup_system(renet_test::camera::setup_target);
-    app.add_startup_system(setup_fps_controller);
     app.add_system(panic_on_error_system);
 
     app.run();
@@ -139,23 +129,6 @@ fn panic_on_error_system(mut renet_error: EventReader<RenetError>) {
     for e in renet_error.iter() {
         panic!("{}", e);
     }
-}
-
-fn setup_fps_controller(mut commands: Commands) {
-    // commands
-    //     .spawn_bundle(FpsControllerPhysicsBundle::default())
-    //     .insert(
-    //         controller::FpsControllerInputQueue::default(), //  {
-    //                                                         //     pitch: -TAU / 12.0,
-    //                                                         //     yaw: TAU * 5.0 / 8.0,
-    //                                                         //     ..default()
-    //                                                         // }
-    //     )
-    //     .insert(controller::FpsController {
-    //         log_name: Some("client"),
-    //         ..default()
-    //     })
-    //     .insert(Transform::from_xyz(0.0, 3.0, 0.0));
 }
 
 fn update_visulizer_system(
@@ -174,25 +147,14 @@ fn update_visulizer_system(
     }
 }
 
-/// read input into PlayerInput resource and enqueue PlayerCommand::BasicAttack
-// #[allow(clippy::too_many_arguments)]
+/// read input for event based user input (enqueue PlayerCommand::BasicAttack)
 fn player_input(
     keyboard_input: Res<Input<KeyCode>>,
-    mut player_input: ResMut<PlayerInput>,
     mouse_button_input: Res<Input<MouseButton>>,
     target_query: Query<&Transform, With<renet_test::WorldSpacePointer>>,
     mut player_commands: EventWriter<PlayerCommand>,
     most_recent_tick: Option<Res<MostRecentTick>>,
 ) {
-    debug!("player_input");
-    player_input.serial += 1;
-    player_input.left = keyboard_input.pressed(KeyCode::A) || keyboard_input.pressed(KeyCode::Left);
-    player_input.right =
-        keyboard_input.pressed(KeyCode::D) || keyboard_input.pressed(KeyCode::Right);
-    player_input.up = keyboard_input.pressed(KeyCode::W) || keyboard_input.pressed(KeyCode::Up);
-    player_input.down = keyboard_input.pressed(KeyCode::S) || keyboard_input.pressed(KeyCode::Down);
-    player_input.most_recent_tick = most_recent_tick.as_ref().map(|tick| tick.from_server);
-
     if mouse_button_input.just_pressed(MouseButton::Left) {
         let target_transform = target_query.single();
         player_commands.send(PlayerCommand::BasicAttack {
@@ -202,9 +164,8 @@ fn player_input(
     // info!("most recent tick: {:?}", most_recent_tick);
 }
 
-/// serialize and send PlayerInput to server on ClientChannel::Input
+/// serialize and send FpsControllerInput to server on ClientChannel::Input
 fn client_send_input(
-    player_input: Res<PlayerInput>,
     mut client: ResMut<RenetClient>,
     mut event_reader: EventReader<controller::FpsControllerInput>,
 ) {

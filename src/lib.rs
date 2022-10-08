@@ -22,16 +22,6 @@ pub struct Player {
     pub id: u64,
 }
 
-#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, Component)]
-pub struct PlayerInput {
-    pub most_recent_tick: Option<u32>,
-    pub serial: u32,
-    pub up: bool,
-    pub down: bool,
-    pub left: bool,
-    pub right: bool,
-}
-
 #[derive(Debug, Serialize, Deserialize, Component)]
 pub enum PlayerCommand {
     BasicAttack { cast_at: Vec3 },
