@@ -102,8 +102,7 @@ fn server_update_system(
     mut server: ResMut<RenetServer>,
     mut visualizer: ResMut<RenetServerVisualizer<200>>,
     mut client_ticks: ResMut<ClientTicks>,
-    players: Query<(Entity, &Player, &Transform)>,
-    mut players_fc: Query<&mut FpsControllerInputQueue>,
+    mut players: Query<(Entity, &Player, &Transform, &mut FpsControllerInputQueue)>,
 ) {
     for event in server_events.iter() {
         match event {
@@ -112,7 +111,7 @@ fn server_update_system(
                 visualizer.add_client(*id);
 
                 // Initialize other players for this new client
-                for (entity, player, transform) in players.iter() {
+                for (entity, player, transform, _) in players.iter() {
                     // let translation: [f32; 3] = transform.translation.into();
                     let message = bincode::serialize(&ServerMessages::PlayerCreate {
                         id: player.id,
@@ -133,7 +132,7 @@ fn server_update_system(
                         ..Default::default()
                     })
                     .insert(Player { id: *id })
-                    // .insert(ExternalImpulse::default())
+                    // insert fps controller stuff
                     .insert_bundle(FpsControllerPhysicsBundle::default())
                     .insert(FpsControllerInputQueue::default())
                     .insert(FpsController {
@@ -180,7 +179,7 @@ fn server_update_system(
                     );
 
                     if let Some(player_entity) = lobby.players.get(&client_id) {
-                        if let Ok((_, _, player_transform)) = players.get(*player_entity) {
+                        if let Ok((_, _, player_transform, _)) = players.get(*player_entity) {
                             cast_at[1] = player_transform.translation[1];
 
                             let direction =
@@ -214,7 +213,7 @@ fn server_update_system(
             inputs.push(input);
         }
         inputs.sort_by_key(|i| i.serial);
-        for mut input_queue in &mut players_fc {
+        for (_, _, _, mut input_queue) in &mut players {
             for input in &inputs {
                 // info!("input: {:?}", input);
                 input_queue.queue.push_back(input.clone());

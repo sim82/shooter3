@@ -149,11 +149,9 @@ fn update_visulizer_system(
 
 /// read input for event based user input (enqueue PlayerCommand::BasicAttack)
 fn player_input(
-    keyboard_input: Res<Input<KeyCode>>,
     mouse_button_input: Res<Input<MouseButton>>,
     target_query: Query<&Transform, With<renet_test::WorldSpacePointer>>,
     mut player_commands: EventWriter<PlayerCommand>,
-    most_recent_tick: Option<Res<MostRecentTick>>,
 ) {
     if mouse_button_input.just_pressed(MouseButton::Left) {
         let target_transform = target_query.single();
@@ -418,12 +416,6 @@ fn client_sync_players(
                     );
                 }
 
-                // if let Ok((mut player_input_queue, mut transform_from_server)) =
-                //     controlled_player.get_mut(*entity)
-                // {
-                //     *transform_from_server = TransformFromServer(transform);
-                //     player_input_queue.last_server_serial = frame.last_player_input;
-                // }
                 if let Ok(mut ent_transform) = transform_query.get_mut(*entity) {
                     *ent_transform = transform;
                 }
