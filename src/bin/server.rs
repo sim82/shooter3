@@ -62,7 +62,7 @@ fn main() {
         .insert_resource(ClientTicks::default())
         .insert_resource(new_renet_server())
         .insert_resource(RenetServerVisualizer::<200>::default())
-        .insert_resource(SendTickTimer(Timer::from_seconds(5.0 / 60.0, true)))
+        .insert_resource(SendTickTimer(Timer::from_seconds(4.0 / 60.0, true)))
         .insert_resource(AddCubeTimer(Timer::from_seconds(1.0, true)));
 
     app.add_system(server_update_system)
@@ -213,7 +213,10 @@ fn server_update_system(
             inputs.push(input);
         }
         inputs.sort_by_key(|i| i.serial);
-        for (_, _, _, mut input_queue) in &mut players {
+        for (_, player, _, mut input_queue) in &mut players {
+            if player.id != client_id {
+                continue;
+            }
             for input in &inputs {
                 // info!("input: {:?}", input);
                 input_queue.queue.push_back(input.clone());

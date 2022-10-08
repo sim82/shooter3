@@ -1,8 +1,6 @@
-use std::{
-    collections::{HashMap, VecDeque},
-    net::UdpSocket,
-    time::SystemTime,
-};
+#![feature(map_first_last)]
+
+use std::{collections::HashMap, net::UdpSocket, time::SystemTime};
 
 use bevy::{diagnostic::FrameTimeDiagnosticsPlugin, prelude::*};
 use bevy_egui::{EguiContext, EguiPlugin};
@@ -13,12 +11,12 @@ use bevy_renet::{
 };
 use renet_test::{
     client_connection_config,
-    controller::{self, FpsController, FpsControllerInputQueue, FpsControllerPhysicsBundle},
+    controller::{self, FpsControllerPhysicsBundle},
     exit_on_esc_system,
     frame::NetworkFrame,
     predict::VelocityExtrapolate,
     setup_level, ClientChannel, ObjectType, PlayerCommand, ServerChannel, ServerMessages,
-    PLAYER_MOVE_SPEED, PROTOCOL_ID,
+    PROTOCOL_ID,
 };
 use renet_visualizer::{RenetClientVisualizer, RenetVisualizerStyle};
 use smooth_bevy_cameras::LookTransformPlugin;
@@ -208,7 +206,8 @@ fn client_sync_players(
     mut controlled_player: Query<
         (
             &mut controller::FpsController,
-            &mut TransformFromServer,
+            &mut controller::FpsControllerLog,
+            &mut Transform,
             &mut Velocity,
         ),
         With<renet_test::ControlledPlayer>,
@@ -357,15 +356,56 @@ fn client_sync_players(
                     ..Default::default()
                 };
 
-                if let Ok((mut fps_controller, mut transform_from_server, mut velocity)) =
-                    controlled_player.get_mut(*entity)
+                if let Ok((
+                    mut fps_controller,
+                    mut controller_log,
+                    mut ent_transform,
+                    mut velocity,
+                )) = controlled_player.get_mut(*entity)
                 {
-                    *transform_from_server = TransformFromServer(transform);
                     // *player_transform = transform;
                     velocity.linvel = frame.entities.velocities[i];
 
                     fps_controller.last_applied_serial = frame.last_player_input;
-                    info!("player transform update: {:?} {:?}", transform, velocity);
+                    if let Some(log_pos) = controller_log
+                        .pos
+                        .get(&(fps_controller.last_applied_serial))
+                    {
+                        let delta = *log_pos - transform.translation;
+                        let delta_len = delta.length();
+                        let velocity_len = velocity.linvel.length();
+
+                        let age = match controller_log.pos.last_key_value() {
+                            Some((last, _)) if *last >= frame.last_player_input => {
+                                Some(last - frame.last_player_input)
+                            }
+                            _ => None,
+                        };
+
+                        while let Some(e) = controller_log.pos.first_entry() {
+                            if *e.key() >= frame.last_player_input {
+                                break;
+                            }
+                            debug!("discard: {}", e.key());
+                            e.remove();
+                        }
+
+                        info!(
+                            "delta: {} {} {} age {:?}",
+                            velocity_len,
+                            delta_len,
+                            delta_len / velocity_len,
+                            age,
+                        );
+
+                        if delta_len > 0.1 {
+                            if velocity.linvel.length() < 0.1 {
+                                info!("correction.");
+                                ent_transform.translation = transform.translation;
+                            }
+                        }
+                    }
+                    // info!("player transform update: {:?} {:?}", transform, velocity);
                 }
                 if let Ok(mut ent_transform) = transform_query.get_mut(*entity) {
                     info!(
@@ -436,7 +476,7 @@ fn predict_entities(
         for (mut transform, transform_from_server, extrapolate) in &mut transform_query {
             transform.translation =
                 extrapolate.apply(tick.predicted, transform_from_server.0.translation);
-            info!(
+            debug!(
                 "predict: {:?} {:?} {:?}",
                 transform.translation, transform_from_server, extrapolate
             );

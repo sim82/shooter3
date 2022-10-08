@@ -1,6 +1,6 @@
 // adapted from https://github.com/qhdwight/bevy_fps_controller
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::f32::consts::*;
 use std::time::Duration;
 
@@ -154,6 +154,11 @@ impl FrameTime {
     }
 }
 
+#[derive(Default, Component)]
+pub struct FpsControllerLog {
+    pub pos: BTreeMap<u32, Vec3>,
+}
+
 impl std::fmt::Display for FrameTime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let micros_per_frame = 1000000 / 60;
@@ -240,17 +245,31 @@ pub fn fps_controller_move(
         &Collider,
         &mut Transform,
         &mut Velocity,
+        &mut FpsControllerLog,
     )>,
 ) {
     let dt = time.delta_seconds();
 
-    for (entity, mut input_queue, mut controller, collider, transform, mut velocity) in
-        query.iter_mut()
+    for (
+        entity,
+        mut input_queue,
+        mut controller,
+        collider,
+        transform,
+        mut velocity,
+        mut controller_log,
+    ) in query.iter_mut()
     {
-        let mut one_applied = false;
-        // info!("queue: {}", input_queue.queue.len());
-
         while let Some(input) = input_queue.queue.pop_front() {
+            // HACK: store transform for last applied serial right before applying a new one, to get more realistic
+            // estimate of position after the input has taken effect (after physics has run).
+            match controller_log.pos.entry(controller.last_applied_serial) {
+                std::collections::btree_map::Entry::Occupied(_) => (),
+                std::collections::btree_map::Entry::Vacant(e) => {
+                    e.insert(transform.translation);
+                }
+            };
+
             if input.fly {
                 controller.move_mode = match controller.move_mode {
                     MoveMode::Noclip => MoveMode::Ground,
@@ -398,7 +417,7 @@ pub fn fps_controller_move(
             }
 
             if let Some(log_name) = controller.log_name {
-                info!(
+                debug!(
                     "applied: {}: {}: {} {:?}",
                     FrameTime::new(time.time_since_startup()),
                     log_name,
@@ -410,6 +429,13 @@ pub fn fps_controller_move(
             if controller.apply_single {
                 break;
             }
+        }
+        if input_queue.queue.len() > 2 {
+            debug!(
+                "queue size: {:?}: {}",
+                controller.log_name,
+                input_queue.queue.len()
+            )
         }
     }
 }
@@ -493,6 +519,7 @@ pub struct FpsControllerPhysicsBundle {
     additional_mass_properties: AdditionalMassProperties,
     gravity_scale: GravityScale,
     ccd: Ccd,
+    controller_log: FpsControllerLog,
     // transform: Transform,
 }
 impl Default for FpsControllerPhysicsBundle {
@@ -508,7 +535,8 @@ impl Default for FpsControllerPhysicsBundle {
             additional_mass_properties: AdditionalMassProperties::Mass(1.0),
             gravity_scale: GravityScale(0.0),
             ccd: Ccd { enabled: true }, // Prevent clipping when going fas,
-                                        // transform: Transform::from_xyz(0.0, 3.0, 0.0),
+            // transform: Transform::from_xyz(0.0, 3.0, 0.0),
+            controller_log: default(),
         }
     }
 }
