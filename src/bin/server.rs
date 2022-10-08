@@ -84,11 +84,6 @@ fn main() {
     app.run();
 }
 
-#[derive(Component, Default)]
-struct PlayerVelocity {
-    velocity: Vec3,
-}
-
 ///
 /// recive ServerEvent
 /// - ClientConnected
@@ -137,7 +132,6 @@ fn server_update_system(
                         transform,
                         ..Default::default()
                     })
-                    .insert(PlayerVelocity::default())
                     .insert(Player { id: *id })
                     // .insert(ExternalImpulse::default())
                     .insert_bundle(FpsControllerPhysicsBundle::default())
