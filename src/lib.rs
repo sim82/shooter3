@@ -39,7 +39,7 @@ pub enum PlayerCommand {
 
 pub enum ClientChannel {
     Input,
-    FcInput,
+    // FcInput,
     Command,
 }
 
@@ -99,27 +99,20 @@ impl ClientChannel {
         match self {
             Self::Input => 0,
             Self::Command => 1,
-            Self::FcInput => 2,
         }
     }
 
     pub fn channels_config() -> Vec<ChannelConfig> {
         vec![
-            ReliableChannelConfig {
+            UnreliableChannelConfig {
                 channel_id: Self::Input.id(),
-                message_resend_time: Duration::ZERO,
+                // message_resend_time: Duration::ZERO,
                 ..Default::default()
             }
             .into(),
             ReliableChannelConfig {
                 channel_id: Self::Command.id(),
                 message_resend_time: Duration::ZERO,
-                ..Default::default()
-            }
-            .into(),
-            UnreliableChannelConfig {
-                channel_id: Self::FcInput.id(),
-                // message_resend_time: Duration::ZERO,
                 ..Default::default()
             }
             .into(),

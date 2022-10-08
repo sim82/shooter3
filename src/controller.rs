@@ -406,7 +406,7 @@ pub fn fps_controller_move(
             }
 
             if let Some(log_name) = controller.log_name {
-                debug!(
+                info!(
                     "applied: {}: {}: {} {:?}",
                     FrameTime::new(time.time_since_startup()),
                     log_name,

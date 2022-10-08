@@ -73,8 +73,7 @@ fn main() {
         .add_system(update_visulizer_system)
         .add_system(despawn_projectile_system)
         .add_system(exit_on_esc_system)
-        // .add_system(add_cube_system)
-        ;
+        .add_system(add_cube_system);
 
     app.add_system(controller::fps_controller_move);
 
@@ -153,7 +152,7 @@ fn server_update_system(
                     .insert_bundle(FpsControllerPhysicsBundle::default())
                     .insert(FpsControllerInputQueue::default())
                     .insert(FpsController {
-                        log_name: Some("server"),
+                        // log_name: Some("server"),
                         apply_single: true,
                         ..default()
                     })
@@ -224,28 +223,10 @@ fn server_update_system(
                 }
             }
         }
-        while let Some(message) = server.receive_message(client_id, ClientChannel::Input.id()) {
-            // let input: PlayerInput = bincode::deserialize(&message).unwrap();
-            // client_ticks.0.insert(client_id, input.most_recent_tick);
-            // if let Some(player_entity) = lobby.players.get(&client_id) {
-            //     if let Ok((_, _, _, mut player_input_queue)) = players.get_mut(*player_entity) {
-            //         // commands.entity(*player_entity).insert(input);
-            //         player_input_queue.queue.push_back(input)
-            //     }
-            // }
-        }
         let mut inputs = Vec::new();
-        while let Some(message) = server.receive_message(client_id, ClientChannel::FcInput.id()) {
+        while let Some(message) = server.receive_message(client_id, ClientChannel::Input.id()) {
             let input: FpsControllerInput = bincode::deserialize(&message).unwrap();
             inputs.push(input);
-            // client_ticks.0.insert(client_id, input.most_recent_tick);
-            // if let Some(player_entity) = lobby.players.get(&client_id) {
-            //     // if let Ok((_, _, _, mut player_input_queue)) = players.get_mut(*player_entity) {
-            //     //     // commands.entity(*player_entity).insert(input);
-            //     //     player_input_queue.queue.push_back(input)
-            //     // }
-            //     info!("input: {:?}", input);
-            // }
         }
         inputs.sort_by_key(|i| i.serial);
         for mut input_queue in &mut players_fc {
@@ -289,7 +270,7 @@ fn server_network_sync(
     time: Res<Time>,
     mut timer: ResMut<SendTickTimer>,
     players: Query<
-        (Entity, &Transform, &PlayerVelocity),
+        (Entity, &Transform, &Velocity),
         (Without<Projectile>, With<Player>, Without<CubeMarker>),
     >,
     projectiles: Query<
@@ -308,7 +289,7 @@ fn server_network_sync(
         // info!("sync player");
         frame.entities.entities.push(entity);
         frame.entities.translations.push(transform.translation);
-        frame.entities.velocities.push(velocity.velocity);
+        frame.entities.velocities.push(velocity.linvel);
         // frame.entities.rotations.push(default());
     }
 
@@ -340,35 +321,6 @@ fn server_network_sync(
         }
     }
 }
-
-// // apply PlayerInput to client entities
-// fn move_players_system(
-//     mut query: Query<(
-//         &mut Transform,
-//         &mut PlayerInputQueue,
-//         &mut PlayerVelocity,
-//         &mut ExternalImpulse,
-//     )>,
-// ) {
-//     for (mut _transform, mut input_queue, mut player_velocity, mut impulse) in query.iter_mut() {
-//         while let Some(input) = input_queue.queue.pop_front() {
-//             debug!("apply player input: {}", input.serial);
-//             let x = (input.right as i8 - input.left as i8) as f32;
-//             let y = (input.down as i8 - input.up as i8) as f32;
-//             let direction = Vec2::new(x, y).normalize_or_zero();
-//             let offs = direction * PLAYER_MOVE_SPEED; // * (1.0 / 60.0);
-//                                                       // transform.translation.x += offs.x;
-//                                                       // transform.translation.z += offs.y;
-//             impulse.impulse.x = offs.x;
-//             impulse.impulse.z = offs.y;
-
-//             player_velocity.velocity = (direction * PLAYER_MOVE_SPEED).extend(0.0).xzy();
-//             input_queue.last_applied_serial = input.serial;
-//             // velocity.linvel.x = direction.x * PLAYER_MOVE_SPEED;
-//             // velocity.linvel.z = direction.y * PLAYER_MOVE_SPEED;
-//         }
-//     }
-// }
 
 pub fn setup_simple_camera(mut commands: Commands) {
     // camera
@@ -413,7 +365,7 @@ struct AddCubeTimer(Timer);
 #[derive(Component)]
 struct CubeMarker;
 
-fn _add_cube_system(
+fn add_cube_system(
     mut commands: Commands,
     time: Res<Time>,
     mut timer: ResMut<AddCubeTimer>,
@@ -421,6 +373,7 @@ fn _add_cube_system(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut server: ResMut<RenetServer>,
 ) {
+    return;
     timer.0.tick(time.delta());
 
     if timer.0.just_finished() {

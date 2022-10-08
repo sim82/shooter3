@@ -208,13 +208,9 @@ fn client_send_input(
     mut client: ResMut<RenetClient>,
     mut event_reader: EventReader<controller::FpsControllerInput>,
 ) {
-    {
-        let input_message = bincode::serialize(&*player_input).unwrap();
-        client.send_message(ClientChannel::Input.id(), input_message);
-    }
     for input in event_reader.iter() {
         let input_message = bincode::serialize(input).unwrap();
-        client.send_message(ClientChannel::FcInput.id(), input_message);
+        client.send_message(ClientChannel::Input.id(), input_message);
     }
 }
 
@@ -251,7 +247,11 @@ fn client_sync_players(
     mut most_recent_tick: Option<ResMut<MostRecentTick>>,
     mut transform_query: Query<&mut Transform>,
     mut controlled_player: Query<
-        (&mut controller::FpsController, &mut TransformFromServer),
+        (
+            &mut controller::FpsController,
+            &mut TransformFromServer,
+            &mut Velocity,
+        ),
         With<renet_test::ControlledPlayer>,
     >,
     mut extrapolate: Query<
@@ -408,13 +408,15 @@ fn client_sync_players(
                     );
                 }
 
-                if let Ok((mut fps_controller, mut transform_from_server)) =
+                if let Ok((mut fps_controller, mut transform_from_server, mut velocity)) =
                     controlled_player.get_mut(*entity)
                 {
-                    info!("player transform update: {:?}", transform);
                     *transform_from_server = TransformFromServer(transform);
                     // *player_transform = transform;
+                    velocity.linvel = frame.entities.velocities[i];
+
                     fps_controller.last_applied_serial = frame.last_player_input;
+                    info!("player transform update: {:?} {:?}", transform, velocity);
                 }
                 if let Ok(mut ent_transform) = transform_query.get_mut(*entity) {
                     *ent_transform = transform;
@@ -484,7 +486,7 @@ fn predict_entities(
         for (mut transform, transform_from_server, extrapolate) in &mut transform_query {
             transform.translation =
                 extrapolate.apply(tick.predicted, transform_from_server.0.translation);
-            debug!(
+            info!(
                 "predict: {:?} {:?} {:?}",
                 transform.translation, transform_from_server, extrapolate
             );
