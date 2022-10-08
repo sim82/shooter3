@@ -68,7 +68,7 @@ fn main() {
 
     app.add_system(server_update_system)
         .add_system(server_network_sync)
-        .add_system(move_players_system)
+        // .add_system(move_players_system)
         .add_system(update_projectiles_system)
         .add_system(update_visulizer_system)
         .add_system(despawn_projectile_system)
@@ -84,12 +84,6 @@ fn main() {
         .add_startup_system(setup_simple_camera);
 
     app.run();
-}
-
-#[derive(Component, Default)]
-struct PlayerInputQueue {
-    queue: VecDeque<PlayerInput>,
-    last_applied_serial: u32,
 }
 
 #[derive(Component, Default)]
@@ -115,7 +109,7 @@ fn server_update_system(
     mut server: ResMut<RenetServer>,
     mut visualizer: ResMut<RenetServerVisualizer<200>>,
     mut client_ticks: ResMut<ClientTicks>,
-    mut players: Query<(Entity, &Player, &Transform, &mut PlayerInputQueue)>,
+    mut players: Query<(Entity, &Player, &Transform)>,
     mut players_fc: Query<&mut FpsControllerInputQueue>,
 ) {
     for event in server_events.iter() {
@@ -125,7 +119,7 @@ fn server_update_system(
                 visualizer.add_client(*id);
 
                 // Initialize other players for this new client
-                for (entity, player, transform, _) in players.iter() {
+                for (entity, player, transform) in players.iter() {
                     // let translation: [f32; 3] = transform.translation.into();
                     let message = bincode::serialize(&ServerMessages::PlayerCreate {
                         id: player.id,
@@ -202,7 +196,7 @@ fn server_update_system(
                     );
 
                     if let Some(player_entity) = lobby.players.get(&client_id) {
-                        if let Ok((_, _, player_transform, _)) = players.get(*player_entity) {
+                        if let Ok((_, _, player_transform)) = players.get(*player_entity) {
                             cast_at[1] = player_transform.translation[1];
 
                             let direction =
@@ -231,14 +225,14 @@ fn server_update_system(
             }
         }
         while let Some(message) = server.receive_message(client_id, ClientChannel::Input.id()) {
-            let input: PlayerInput = bincode::deserialize(&message).unwrap();
-            client_ticks.0.insert(client_id, input.most_recent_tick);
-            if let Some(player_entity) = lobby.players.get(&client_id) {
-                if let Ok((_, _, _, mut player_input_queue)) = players.get_mut(*player_entity) {
-                    // commands.entity(*player_entity).insert(input);
-                    player_input_queue.queue.push_back(input)
-                }
-            }
+            // let input: PlayerInput = bincode::deserialize(&message).unwrap();
+            // client_ticks.0.insert(client_id, input.most_recent_tick);
+            // if let Some(player_entity) = lobby.players.get(&client_id) {
+            //     if let Ok((_, _, _, mut player_input_queue)) = players.get_mut(*player_entity) {
+            //         // commands.entity(*player_entity).insert(input);
+            //         player_input_queue.queue.push_back(input)
+            //     }
+            // }
         }
         let mut inputs = Vec::new();
         while let Some(message) = server.receive_message(client_id, ClientChannel::FcInput.id()) {
@@ -347,34 +341,34 @@ fn server_network_sync(
     }
 }
 
-// apply PlayerInput to client entities
-fn move_players_system(
-    mut query: Query<(
-        &mut Transform,
-        &mut PlayerInputQueue,
-        &mut PlayerVelocity,
-        &mut ExternalImpulse,
-    )>,
-) {
-    for (mut _transform, mut input_queue, mut player_velocity, mut impulse) in query.iter_mut() {
-        while let Some(input) = input_queue.queue.pop_front() {
-            debug!("apply player input: {}", input.serial);
-            let x = (input.right as i8 - input.left as i8) as f32;
-            let y = (input.down as i8 - input.up as i8) as f32;
-            let direction = Vec2::new(x, y).normalize_or_zero();
-            let offs = direction * PLAYER_MOVE_SPEED; // * (1.0 / 60.0);
-                                                      // transform.translation.x += offs.x;
-                                                      // transform.translation.z += offs.y;
-            impulse.impulse.x = offs.x;
-            impulse.impulse.z = offs.y;
+// // apply PlayerInput to client entities
+// fn move_players_system(
+//     mut query: Query<(
+//         &mut Transform,
+//         &mut PlayerInputQueue,
+//         &mut PlayerVelocity,
+//         &mut ExternalImpulse,
+//     )>,
+// ) {
+//     for (mut _transform, mut input_queue, mut player_velocity, mut impulse) in query.iter_mut() {
+//         while let Some(input) = input_queue.queue.pop_front() {
+//             debug!("apply player input: {}", input.serial);
+//             let x = (input.right as i8 - input.left as i8) as f32;
+//             let y = (input.down as i8 - input.up as i8) as f32;
+//             let direction = Vec2::new(x, y).normalize_or_zero();
+//             let offs = direction * PLAYER_MOVE_SPEED; // * (1.0 / 60.0);
+//                                                       // transform.translation.x += offs.x;
+//                                                       // transform.translation.z += offs.y;
+//             impulse.impulse.x = offs.x;
+//             impulse.impulse.z = offs.y;
 
-            player_velocity.velocity = (direction * PLAYER_MOVE_SPEED).extend(0.0).xzy();
-            input_queue.last_applied_serial = input.serial;
-            // velocity.linvel.x = direction.x * PLAYER_MOVE_SPEED;
-            // velocity.linvel.z = direction.y * PLAYER_MOVE_SPEED;
-        }
-    }
-}
+//             player_velocity.velocity = (direction * PLAYER_MOVE_SPEED).extend(0.0).xzy();
+//             input_queue.last_applied_serial = input.serial;
+//             // velocity.linvel.x = direction.x * PLAYER_MOVE_SPEED;
+//             // velocity.linvel.z = direction.y * PLAYER_MOVE_SPEED;
+//         }
+//     }
+// }
 
 pub fn setup_simple_camera(mut commands: Commands) {
     // camera
