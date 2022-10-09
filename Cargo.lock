@@ -3113,6 +3113,7 @@ dependencies = [
  "rand",
  "renet_visualizer",
  "serde",
+ "serde_json",
  "smooth-bevy-cameras",
 ]
 

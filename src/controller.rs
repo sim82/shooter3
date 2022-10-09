@@ -1,10 +1,12 @@
 // adapted from https://github.com/qhdwight/bevy_fps_controller
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, VecDeque};
 use std::f32::consts::*;
 use std::time::Duration;
 
 use bevy::input::mouse::MouseMotion;
+use bevy::utils::Instant;
 use bevy::{math::Vec3Swizzles, prelude::*};
 use bevy_rapier3d::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -146,17 +148,13 @@ impl Default for FpsController {
     }
 }
 
-struct FrameTime(Duration);
+#[derive(Default)]
+pub struct FrameTime(Duration);
 
 impl FrameTime {
     pub fn new(time: Duration) -> FrameTime {
         FrameTime(time)
     }
-}
-
-#[derive(Default, Component)]
-pub struct FpsControllerLog {
-    pub pos: BTreeMap<u32, Vec3>,
 }
 
 impl std::fmt::Display for FrameTime {
@@ -166,6 +164,99 @@ impl std::fmt::Display for FrameTime {
         let b = (self.0.as_micros() % micros_per_frame) * 1000 / micros_per_frame;
 
         write!(f, "{}:{:03}", a, b)
+    }
+}
+
+#[derive(Default, Component)]
+pub struct FpsControllerLog {
+    pos: BTreeMap<u32, Vec3>,
+    log: Option<(&'static str, std::fs::File)>,
+    last_put_time: Option<Instant>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ExternalLogRecord {
+    pub serial: u32,
+    pub log_name: String,
+    pub pos: Vec3,
+    pub dt: Duration,
+}
+
+impl FpsControllerLog {
+    pub fn put(&mut self, serial: u32, pos: &Vec3) {
+        match self.pos.entry(serial) {
+            std::collections::btree_map::Entry::Occupied(_) => (),
+            std::collections::btree_map::Entry::Vacant(e) => {
+                e.insert(*pos);
+
+                let now = Instant::now();
+                // let d = self
+                //     .last_put_time
+                //     .map(|last| FrameTime::new(now.duration_since(last)))
+                // .unwrap_or_default();
+                let d = self
+                    .last_put_time
+                    .map(|last| now.duration_since(last))
+                    .unwrap_or_default();
+
+                if let Some((log_name, log_file)) = &mut self.log {
+                    use std::io::Write;
+                    // let _ = writeln!(log_file, "\"{:05}\",\"{}\",\"{}\"", serial, log_name, pos);
+                    // let _ = writeln!(log_file, "{:05},{},{},{}", serial, log_name, pos.x, d);
+
+                    let s = serde_json::to_string(&ExternalLogRecord {
+                        serial,
+                        log_name: log_name.to_owned(),
+                        pos: *pos,
+                        dt: d,
+                    })
+                    .unwrap();
+                    writeln!(log_file, "{}", s);
+                }
+
+                self.last_put_time = Some(now);
+            }
+        };
+    }
+
+    pub fn discard(&mut self, serial: u32) {
+        while let Some(e) = self.pos.first_entry() {
+            if *e.key() >= serial {
+                break;
+            }
+            debug!("discard: {}", e.key());
+            e.remove();
+        }
+    }
+    pub fn get_delta(&self, pos: &Vec3, serial: u32) -> Option<(f32, Vec3)> {
+        if let Some(log_pos) = self.pos.get(&serial) {
+            let delta = *log_pos - *pos;
+            let delta_len = delta.length();
+
+            let age = match self.pos.last_key_value() {
+                Some((last, _)) if *last >= serial => Some(last - serial),
+                _ => None,
+            };
+
+            // let velocity_len = velocity.linvel.length();
+            info!(
+                "delta: {} age {:?}",
+                // velocity_len,
+                delta_len,
+                // delta_len / velocity_len,
+                age,
+            );
+            Some((delta_len, delta))
+            // if delta_len > 0.1 {
+            //     if velocity.linvel.length() < 0.1 {
+            //         info!("correction.");
+            //         ent_transform.translation = transform.translation;
+            //     }
+            // }
+        } else {
+            None
+        }
+        // info!("player transform update: {:?} {:?}", transform, velocity);
     }
 }
 
@@ -263,12 +354,9 @@ pub fn fps_controller_move(
         while let Some(input) = input_queue.queue.pop_front() {
             // HACK: store transform for last applied serial right before applying a new one, to get more realistic
             // estimate of position after the input has taken effect (after physics has run).
-            match controller_log.pos.entry(controller.last_applied_serial) {
-                std::collections::btree_map::Entry::Occupied(_) => (),
-                std::collections::btree_map::Entry::Vacant(e) => {
-                    e.insert(transform.translation);
-                }
-            };
+            // controller_log.put(controller.last_applied_serial, &transform.translation);
+
+            controller_log.put(input.serial, &transform.translation);
 
             if input.fly {
                 controller.move_mode = match controller.move_mode {
@@ -519,7 +607,6 @@ pub struct FpsControllerPhysicsBundle {
     additional_mass_properties: AdditionalMassProperties,
     gravity_scale: GravityScale,
     ccd: Ccd,
-    controller_log: FpsControllerLog,
     // transform: Transform,
 }
 impl Default for FpsControllerPhysicsBundle {
@@ -535,8 +622,33 @@ impl Default for FpsControllerPhysicsBundle {
             additional_mass_properties: AdditionalMassProperties::Mass(1.0),
             gravity_scale: GravityScale(0.0),
             ccd: Ccd { enabled: true }, // Prevent clipping when going fas,
-            // transform: Transform::from_xyz(0.0, 3.0, 0.0),
-            controller_log: default(),
+                                        // transform: Transform::from_xyz(0.0, 3.0, 0.0),
+                                        // controller_log: default(),
+        }
+    }
+}
+
+#[derive(Bundle, Default)]
+pub struct FpsControllerLocgicBundle {
+    controller_log: FpsControllerLog,
+    input_queue: FpsControllerInputQueue,
+    controller: FpsController,
+}
+
+impl FpsControllerLocgicBundle {
+    pub fn with_log_name(name: &'static str) -> Self {
+        Self {
+            controller_log: FpsControllerLog {
+                log: std::fs::File::create(format!("{}.log", name))
+                    .ok()
+                    .map(|f| (name, f)),
+                ..default()
+            },
+            input_queue: default(),
+            controller: FpsController {
+                log_name: Some(name),
+                ..default()
+            },
         }
     }
 }

@@ -11,7 +11,7 @@ use bevy_renet::{
 };
 use renet_test::{
     client_connection_config,
-    controller::{self, FpsControllerPhysicsBundle},
+    controller::{self, FpsControllerLocgicBundle, FpsControllerPhysicsBundle},
     exit_on_esc_system,
     frame::NetworkFrame,
     predict::VelocityExtrapolate,
@@ -240,19 +240,7 @@ fn client_sync_players(
                         .insert(renet_test::ControlledPlayer)
                         // .insert(PlayerInputQueue::default());
                         .insert_bundle(FpsControllerPhysicsBundle::default())
-                        .insert(
-                            controller::FpsControllerInputQueue::default(), //  {
-                                                                            //     pitch: -TAU / 12.0,
-                                                                            //     yaw: TAU * 5.0 / 8.0,
-                                                                            //     ..default()
-                                                                            // }
-                        )
-                        .insert(controller::FpsController {
-                            log_name: Some("client"),
-                            ..default()
-                        })
-                        // .insert(Transform::from_xyz(0.0, 3.0, 0.0))
-                        ;
+                        .insert_bundle(FpsControllerLocgicBundle::with_log_name("client"));
                 } else {
                     client_entity.insert(VelocityExtrapolate::default());
                 }
@@ -367,44 +355,16 @@ fn client_sync_players(
                     velocity.linvel = frame.entities.velocities[i];
 
                     fps_controller.last_applied_serial = frame.last_player_input;
-                    if let Some(log_pos) = controller_log
-                        .pos
-                        .get(&(fps_controller.last_applied_serial))
+
+                    if let Some((delta_len, delta)) = controller_log
+                        .get_delta(&transform.translation, fps_controller.last_applied_serial)
                     {
-                        let delta = *log_pos - transform.translation;
-                        let delta_len = delta.length();
-                        let velocity_len = velocity.linvel.length();
-
-                        let age = match controller_log.pos.last_key_value() {
-                            Some((last, _)) if *last >= frame.last_player_input => {
-                                Some(last - frame.last_player_input)
-                            }
-                            _ => None,
-                        };
-
-                        while let Some(e) = controller_log.pos.first_entry() {
-                            if *e.key() >= frame.last_player_input {
-                                break;
-                            }
-                            debug!("discard: {}", e.key());
-                            e.remove();
-                        }
-
-                        info!(
-                            "delta: {} {} {} age {:?}",
-                            velocity_len,
-                            delta_len,
-                            delta_len / velocity_len,
-                            age,
-                        );
-
-                        if delta_len > 0.1 {
-                            if velocity.linvel.length() < 0.1 {
-                                info!("correction.");
-                                ent_transform.translation = transform.translation;
-                            }
+                        if delta_len > 0.1 && velocity.linvel.length() < 0.1 {
+                            info!("correction.");
+                            ent_transform.translation = transform.translation;
                         }
                     }
+                    controller_log.discard(fps_controller.last_applied_serial)
                     // info!("player transform update: {:?} {:?}", transform, velocity);
                 }
                 if let Ok(mut ent_transform) = transform_query.get_mut(*entity) {

@@ -14,7 +14,7 @@ use bevy_renet::{
 use renet_test::{
     controller::{
         self, FpsController, FpsControllerInput, FpsControllerInputQueue,
-        FpsControllerPhysicsBundle,
+        FpsControllerLocgicBundle, FpsControllerPhysicsBundle,
     },
     exit_on_esc_system,
     frame::NetworkFrame,
@@ -134,12 +134,13 @@ fn server_update_system(
                     .insert(Player { id: *id })
                     // insert fps controller stuff
                     .insert_bundle(FpsControllerPhysicsBundle::default())
-                    .insert(FpsControllerInputQueue::default())
-                    .insert(FpsController {
-                        log_name: Some("server"),
-                        apply_single: true,
-                        ..default()
-                    })
+                    .insert_bundle(FpsControllerLocgicBundle::with_log_name("server"))
+                    // .insert(FpsControllerInputQueue::default())
+                    // .insert(FpsController {
+                    //     log_name: Some("server"),
+                    //     apply_single: true,
+                    //     ..default()
+                    // })
                     .id();
 
                 lobby.players.insert(*id, player_entity);
